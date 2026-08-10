@@ -2,10 +2,15 @@
 name = "tinyviolin"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 description = "Small real-time-safe synthesized instruments"
+license = "MIT"
 repository = "https://github.com/SanderVocke/tinyviolin"
+documentation = "https://docs.rs/tinyviolin"
+readme = "README.md"
 keywords = ["audio", "synthesizer", "midi", "dsp"]
 categories = ["multimedia::audio"]
+exclude = ["/.github", "/.gitignore", "/bundler.toml"]
 
 [workspace]
 members = [".", "showcase"]

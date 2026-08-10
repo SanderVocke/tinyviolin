@@ -606,10 +606,10 @@ fn validate_layer(layer: MidiLayer) -> Result<(), MidiError> {
     if !layer.gain.is_finite() || !(0.0..=1.0).contains(&layer.gain) {
         return Err(MidiError::InvalidLayerSettings);
     }
-    if let MidiPitch::Fixed(frequency) = layer.pitch
-        && (!frequency.is_finite() || frequency <= 0.0)
-    {
-        return Err(MidiError::InvalidLayerSettings);
+    if let MidiPitch::Fixed(frequency) = layer.pitch {
+        if !frequency.is_finite() || frequency <= 0.0 {
+            return Err(MidiError::InvalidLayerSettings);
+        }
     }
     Ok(())
 }

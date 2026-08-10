@@ -2,6 +2,23 @@
 
 `tinyviolin` is a small dependency-free Rust library for generated instrument sounds and in-place multichannel audio processing. It is intended as a minimal demonstrator for integrating MIDI, synthesis, audio input mixing, and simple post-processing effects into music production software.
 
+## Installation
+
+Add the library to your project with:
+
+```text
+cargo add tinyviolin
+```
+
+Or add it directly to your manifest:
+
+```toml
+[dependencies]
+tinyviolin = "0.1.0"
+```
+
+The minimum supported Rust version is 1.85.
+
 ## Instruments
 
 | Instrument | Simple synthesis model | Typical frequency |
@@ -205,4 +222,9 @@ cargo test --workspace --all-targets
 cargo test --workspace --doc
 cargo doc --workspace --no-deps
 cargo check -p tinyviolin-showcase --all-features --all-targets
+cargo publish -p tinyviolin --dry-run
 ```
+
+## License
+
+Licensed under the [MIT License](https://github.com/SanderVocke/tinyviolin/blob/master/LICENSE).
