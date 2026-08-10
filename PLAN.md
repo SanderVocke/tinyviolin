@@ -98,11 +98,12 @@ Stages are ordered; each stage depends on the preceding stages unless explicitly
 
 ### Stage 5 — Usage documentation and audible validation
 
-- [ ] Expand the README with minimal core and MIDI examples, capacity sizing, sample-rate setup, event-order requirements, mapping setup, and callback safety guidance.
-- [ ] Add a dependency-free example that schedules melodic and percussion events and writes a valid WAV containing an identifiable section for each preset.
-- [ ] Add rustdoc examples for engine construction, direct events, layered MIDI mapping, and error handling.
-- [ ] Run the example, inspect WAV metadata/duration and sample bounds programmatically, and audition it using a documented checklist: stable basic pitches, bass low/rounded, pad slow/sustained, lead prominent, bass drum low with downward pitch, tom tonal, snare noisy/tonal, and hi-hat short/bright.
-- [ ] Verify `cargo test --all-targets`, doctests, and a clean release example run; commit documentation and audible validation.
+- [x] Expand the README with minimal core and MIDI examples, capacity sizing, sample-rate setup, event-order requirements, mapping setup, and callback safety guidance.
+- [x] Add a dependency-free example that schedules melodic and percussion events and writes a valid WAV containing an identifiable section for each preset.
+- [x] Add rustdoc examples for engine construction, direct events, layered MIDI mapping, and error handling.
+- [x] Run the example and inspect WAV metadata/duration, per-section signal, and sample bounds programmatically without opening an audio device.
+- [ ] **Skipped by explicit user instruction:** play the WAV through system audio and audition this checklist: stable basic pitches, bass low/rounded, pad slow/sustained, lead prominent, bass drum low with downward pitch, tom tonal, snare noisy/tonal, and hi-hat short/bright.
+- [x] Verify `cargo test --all-targets`, doctests, and a clean release example run; commit documentation and non-playback validation.
 
 ### Stage 6 — Cross-platform GitHub Actions
 
