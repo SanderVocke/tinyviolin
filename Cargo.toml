@@ -1,0 +1,17 @@
+[package]
+name = "tinyviolin"
+version = "0.1.0"
+edition = "2024"
+description = "Small real-time-safe synthesized instruments"
+repository = "https://github.com/svocke/tinyviolin"
+keywords = ["audio", "synthesizer", "midi", "dsp"]
+categories = ["multimedia::audio"]
+
+[dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
