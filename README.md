@@ -34,6 +34,8 @@ The minimum supported Rust version is 1.85.
 
 The oscillators are intentionally elementary rather than band-limited, so very high oscillator frequencies can alias. Frequencies must be positive and finite and are clamped below Nyquist during synthesis.
 
+Each instrument exposes `Instrument::default_gain()`, a linear calibration based on its waveform, spectrum, envelope, and duration at the typical pitches above. Built-in MIDI presets apply this calibration automatically, so equal MIDI velocities have similar perceived loudness. Direct `Event`s and custom `MidiLayer`s remain explicit: multiply velocity by `default_gain()` when the same behavior is desired. The calibration preserves the contrasting attacks and durations of pads and percussion rather than flattening their envelopes.
+
 ## Direct event control
 
 ```rust
@@ -45,7 +47,7 @@ let events = [
         id: VoiceId(1),
         instrument: Instrument::Bass,
         frequency_hz: 110.0,
-        gain: 0.5,
+        gain: Instrument::Bass.default_gain() * 0.5,
     }),
     TimedEvent::new(192, Event::NoteOff(VoiceId(1))),
 ];

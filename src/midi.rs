@@ -213,8 +213,10 @@ impl<const VOICES: usize, const LAYERS: usize> MidiSynth<VOICES, LAYERS> {
 
     /// Replace all channel/note mappings with a built-in preset.
     ///
-    /// The preset is applied to all 16 MIDI channels. Additional mapping layers
-    /// are cleared. This setup operation performs bounded fixed-storage writes.
+    /// The preset is applied to all 16 MIDI channels using each instrument's
+    /// perceived-loudness-calibrated [`Instrument::default_gain`]. Additional
+    /// mapping layers are cleared. This setup operation performs bounded
+    /// fixed-storage writes.
     pub fn select_preset(&mut self, preset: Preset) {
         for channel in &mut self.mappings {
             for (note, mapping) in (0_u8..=127).zip(channel) {
@@ -227,7 +229,7 @@ impl<const VOICES: usize, const LAYERS: usize> MidiSynth<VOICES, LAYERS> {
                     } else {
                         MidiPitch::Fixed(percussion_frequency(instrument))
                     },
-                    gain: 1.0,
+                    gain: instrument.default_gain(),
                 });
             }
         }
@@ -746,7 +748,8 @@ mod tests {
 
         for channel in &midi.mappings {
             for mapping in channel {
-                assert!(mapping.layers[0].is_some());
+                let layer = mapping.layers[0].unwrap();
+                assert!((layer.gain - layer.instrument.default_gain()).abs() < f32::EPSILON);
                 assert!(mapping.layers[1].is_none());
             }
         }
