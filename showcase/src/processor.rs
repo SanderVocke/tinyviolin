@@ -159,7 +159,7 @@ fn note_on_event(id: VoiceId, preset: Preset, note: u8, velocity: f32) -> Event 
     };
     Event::NoteOn {
         id,
-        instrument: preset.instrument(),
+        instrument: preset.instrument(note),
         frequency_hz: preset.frequency_hz(note),
         gain: NOTE_GAIN * velocity,
     }
@@ -244,7 +244,7 @@ mod tests {
                         16,
                         Event::NoteOn {
                             id: host_voice_id(2, 69),
-                            instrument: Preset::Square.instrument(),
+                            instrument: Preset::Square.instrument(69),
                             frequency_hz: 440.0,
                             gain: 0.7,
                         },

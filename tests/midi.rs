@@ -1,9 +1,9 @@
 #![allow(clippy::float_cmp)] // Exact equality proves invalid streams leave buffers untouched.
 
-use tinyviolin::Instrument;
 use tinyviolin::midi::{
     MAX_MESSAGE_BYTES, MidiError, MidiLayer, MidiMessage, MidiPitch, MidiSynth, TimedMidiMessage,
 };
+use tinyviolin::{Instrument, Preset, StateError};
 
 fn message(bytes: &[u8]) -> MidiMessage {
     MidiMessage::new(bytes).unwrap()
@@ -142,4 +142,100 @@ fn malformed_and_unsupported_messages_do_not_change_state() {
         Err(MidiError::UnsupportedMessage)
     );
     assert_eq!(midi.engine().active_voice_count(), 0);
+}
+
+#[test]
+fn runtime_presets_can_be_enumerated_and_selected_by_stable_id() {
+    let mut midi = MidiSynth::<8, 2>::new(48_000.0).unwrap();
+    let kit = midi
+        .available_presets()
+        .iter()
+        .copied()
+        .find(|preset| preset.id() == "percussion-kit")
+        .unwrap();
+    assert_eq!(kit, Preset::PercussionKit);
+
+    midi.select_preset_by_id(kit.id()).unwrap();
+    assert_eq!(midi.selected_preset(), Some(kit));
+    assert_eq!(
+        midi.select_preset_by_id("not-from-this-version"),
+        Err(MidiError::UnknownPreset)
+    );
+    assert_eq!(midi.selected_preset(), Some(kit));
+
+    // Every key on every channel is assigned by a built-in preset.
+    midi.dispatch(message(&[0x9f, 0, 127])).unwrap();
+    midi.dispatch(message(&[0x90, 127, 127])).unwrap();
+    assert_eq!(midi.engine().active_voice_count(), 2);
+}
+
+#[test]
+fn dsp_reset_is_immediate_and_preserves_configuration() {
+    let mut midi = MidiSynth::<4, 1>::new(48_000.0).unwrap();
+    midi.select_preset(Preset::Pad);
+    midi.dispatch(message(&[0x90, 60, 127])).unwrap();
+    assert_eq!(midi.engine().active_voice_count(), 1);
+
+    midi.reset_dsp();
+    assert_eq!(midi.engine().active_voice_count(), 0);
+    assert_eq!(midi.selected_preset(), Some(Preset::Pad));
+
+    midi.dispatch(message(&[0x90, 60, 127])).unwrap();
+    assert_eq!(midi.engine().active_voice_count(), 1);
+    midi.panic();
+    assert_eq!(midi.engine().active_voice_count(), 0);
+}
+
+#[test]
+fn serialized_state_round_trips_configuration_but_not_dsp() {
+    let mut source = MidiSynth::<4, 2>::new(48_000.0).unwrap();
+    source
+        .set_layer(4, 72, 0, layer(Instrument::Lead, MidiPitch::Note, 0.625))
+        .unwrap();
+    source
+        .set_layer(
+            4,
+            72,
+            1,
+            layer(Instrument::Snare, MidiPitch::Fixed(180.0), 0.25),
+        )
+        .unwrap();
+    source.dispatch(message(&[0x94, 72, 127])).unwrap();
+    assert_eq!(source.engine().active_voice_count(), 2);
+    let state = source.serialize_state();
+
+    let mut restored = MidiSynth::<4, 2>::new(48_000.0).unwrap();
+    restored.load_state(&state).unwrap();
+    assert_eq!(restored.serialize_state(), state);
+    assert_eq!(restored.engine().active_voice_count(), 0);
+
+    source.reset_dsp();
+    source.dispatch(message(&[0x94, 72, 100])).unwrap();
+    restored.dispatch(message(&[0x94, 72, 100])).unwrap();
+    let mut expected = [0.0; 256];
+    let mut actual = [0.0; 256];
+    source.process(&mut expected, &[]).unwrap();
+    restored.process(&mut actual, &[]).unwrap();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn invalid_or_incompatible_state_is_transactional() {
+    let mut source = MidiSynth::<2, 2>::new(48_000.0).unwrap();
+    source.select_preset(Preset::Bass);
+    let two_layer_state = source.serialize_state();
+
+    let mut target = MidiSynth::<2, 1>::new(48_000.0).unwrap();
+    target.select_preset(Preset::Sine);
+    let before = target.serialize_state();
+    assert_eq!(
+        target.load_state(&two_layer_state),
+        Err(StateError::IncompatibleMidiLayers)
+    );
+    assert_eq!(target.serialize_state(), before);
+    assert_eq!(
+        target.load_state(&two_layer_state[..8]),
+        Err(StateError::InvalidData)
+    );
+    assert_eq!(target.serialize_state(), before);
 }

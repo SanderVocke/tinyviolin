@@ -46,6 +46,20 @@ impl<const VOICES: usize> Synth<VOICES> {
         self.voices.iter().filter(|voice| voice.active).count()
     }
 
+    /// Immediately clear all voice and oscillator DSP state.
+    ///
+    /// The sample rate and other engine configuration are preserved. This is
+    /// suitable for a host's panic/reset action and performs no allocation.
+    pub fn reset_dsp(&mut self) {
+        self.voices.fill(Voice::EMPTY);
+        self.age = 0;
+    }
+
+    /// Alias for [`Self::reset_dsp`] named after the conventional host action.
+    pub fn panic(&mut self) {
+        self.reset_dsp();
+    }
+
     /// Apply one event immediately, before the next generated sample.
     ///
     /// This method performs no allocation or locking.
