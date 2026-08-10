@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 id,
                 instrument,
                 frequency_hz,
-                gain: 0.65,
+                gain: 0.65 * instrument.default_gain(),
             },
         );
         let mut section = vec![0.0_f32; SECTION_SAMPLES];
