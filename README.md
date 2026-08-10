@@ -142,5 +142,3 @@ cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
 cargo doc --no-deps
 ```
-
-See [`PLAN.md`](PLAN.md) for the staged implementation and verification record.
