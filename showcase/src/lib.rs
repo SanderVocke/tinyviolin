@@ -10,12 +10,40 @@ use nice_plug::{editor::dpi::LogicalSize, prelude::*};
 use nice_plug_egui::EguiState;
 #[doc(hidden)]
 pub use preset::Preset;
-use processor::{ShowcaseProcessor, apply_gain_and_duplicate};
+use processor::{ShowcaseProcessor, apply_gain};
 use std::sync::Arc;
 
 const DEFAULT_SAMPLE_RATE: f32 = 48_000.0;
+const DEFAULT_CHANNELS: usize = 2;
+const MAX_PLUGIN_CHANNELS: usize = 63;
 const EDITOR_WIDTH: f32 = 640.0;
-const EDITOR_HEIGHT: f32 = 300.0;
+const EDITOR_HEIGHT: f32 = 340.0;
+
+const fn audio_layout(channel_count: u32) -> AudioIOLayout {
+    AudioIOLayout {
+        main_input_channels: NonZeroU32::new(channel_count),
+        main_output_channels: NonZeroU32::new(channel_count),
+        ..AudioIOLayout::const_default()
+    }
+}
+
+const fn audio_layouts() -> [AudioIOLayout; MAX_PLUGIN_CHANNELS] {
+    let mut layouts = [AudioIOLayout::const_default(); MAX_PLUGIN_CHANNELS];
+    // Keep stereo as the host default, followed by mono and all remaining
+    // channel counts representable by a VST3 speaker arrangement.
+    layouts[0] = audio_layout(2);
+    layouts[1] = audio_layout(1);
+    let mut index = 2;
+    let mut channel_count = 3;
+    while index < MAX_PLUGIN_CHANNELS {
+        layouts[index] = audio_layout(channel_count);
+        index += 1;
+        channel_count += 1;
+    }
+    layouts
+}
+
+const AUDIO_IO_LAYOUTS: [AudioIOLayout; MAX_PLUGIN_CHANNELS] = audio_layouts();
 
 pub struct TinyViolinShowcase {
     params: Arc<ShowcaseParams>,
@@ -34,6 +62,18 @@ struct ShowcaseParams {
 
     #[id = "master-gain"]
     master_gain: FloatParam,
+
+    #[id = "reverb-enabled"]
+    reverb_enabled: BoolParam,
+
+    #[id = "reverb-amount"]
+    reverb_amount: FloatParam,
+
+    #[id = "distortion-enabled"]
+    distortion_enabled: BoolParam,
+
+    #[id = "distortion-drive"]
+    distortion_drive: FloatParam,
 }
 
 impl Default for ShowcaseParams {
@@ -54,6 +94,27 @@ impl Default for ShowcaseParams {
             .with_unit(" dB")
             .with_value_to_string(formatters::v2s_f32_gain_to_db(1))
             .with_string_to_value(formatters::s2v_f32_gain_to_db()),
+            reverb_enabled: BoolParam::new("Reverb", false),
+            reverb_amount: FloatParam::new(
+                "Reverb Amount",
+                0.25,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            )
+            .with_unit(" %")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+            distortion_enabled: BoolParam::new("Distortion", false),
+            distortion_drive: FloatParam::new(
+                "Distortion Drive",
+                4.0,
+                FloatRange::Skewed {
+                    min: 1.0,
+                    max: 20.0,
+                    factor: FloatRange::skew_factor(-1.0),
+                },
+            )
+            .with_unit("x")
+            .with_value_to_string(formatters::v2s_f32_rounded(1)),
         }
     }
 }
@@ -63,8 +124,8 @@ impl Default for TinyViolinShowcase {
         let (audio_keyboard, editor_keyboard) = keyboard_channel(256);
         Self {
             params: Arc::new(ShowcaseParams::default()),
-            processor: ShowcaseProcessor::new(DEFAULT_SAMPLE_RATE)
-                .expect("the fixed default sample rate is valid"),
+            processor: ShowcaseProcessor::with_channels(DEFAULT_SAMPLE_RATE, DEFAULT_CHANNELS)
+                .expect("the fixed default audio configuration is valid"),
             audio_keyboard,
             initial_editor_keyboard: Some(editor_keyboard),
         }
@@ -78,18 +139,7 @@ impl Plugin for TinyViolinShowcase {
     const EMAIL: &'static str = "sander.vocke@asmpt.com";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
-    const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[
-        AudioIOLayout {
-            main_input_channels: None,
-            main_output_channels: NonZeroU32::new(2),
-            ..AudioIOLayout::const_default()
-        },
-        AudioIOLayout {
-            main_input_channels: None,
-            main_output_channels: NonZeroU32::new(1),
-            ..AudioIOLayout::const_default()
-        },
-    ];
+    const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &AUDIO_IO_LAYOUTS;
     const MIDI_INPUT: MidiConfig = MidiConfig::Basic;
     const SAMPLE_ACCURATE_AUTOMATION: bool = true;
 
@@ -106,11 +156,20 @@ impl Plugin for TinyViolinShowcase {
 
     fn initialize(
         &mut self,
-        _audio_io_layout: &AudioIOLayout,
+        audio_io_layout: &AudioIOLayout,
         buffer_config: &BufferConfig,
         _context: &mut impl InitContext<Self>,
     ) -> bool {
-        match ShowcaseProcessor::new(buffer_config.sample_rate) {
+        let Some(input_channels) = audio_io_layout.main_input_channels else {
+            return false;
+        };
+        if audio_io_layout.main_output_channels != Some(input_channels) {
+            return false;
+        }
+        let Ok(channel_count) = usize::try_from(input_channels.get()) else {
+            return false;
+        };
+        match ShowcaseProcessor::with_channels(buffer_config.sample_rate, channel_count) {
             Ok(processor) => {
                 self.processor = processor;
                 true
@@ -121,7 +180,8 @@ impl Plugin for TinyViolinShowcase {
 
     fn reset(&mut self) {
         let sample_rate = self.processor.sample_rate();
-        if let Ok(processor) = ShowcaseProcessor::new(sample_rate) {
+        let channel_count = self.processor.channel_count();
+        if let Ok(processor) = ShowcaseProcessor::with_channels(sample_rate, channel_count) {
             self.processor = processor;
         }
         self.audio_keyboard.reset();
@@ -141,9 +201,19 @@ impl Plugin for TinyViolinShowcase {
             return process_error(error);
         }
 
+        let settings = tinyviolin::EffectSettings {
+            reverb_enabled: self.params.reverb_enabled.value(),
+            reverb_amount: self.params.reverb_amount.value(),
+            distortion_enabled: self.params.distortion_enabled.value(),
+            distortion_drive: self.params.distortion_drive.value(),
+        };
+        if let Err(error) = self.processor.set_effect_settings(settings) {
+            return process_error(error);
+        }
+
         let channels = buffer.as_slice();
-        let Some((mono, _)) = channels.split_first_mut() else {
-            return ProcessStatus::Error("tinyviolin requires an output channel");
+        let Some(block_len) = channels.first().map(|channel| channel.len()) else {
+            return ProcessStatus::Error("tinyviolin requires input and output channels");
         };
 
         let mut cursor = 0;
@@ -156,8 +226,8 @@ impl Plugin for TinyViolinShowcase {
                     velocity,
                     ..
                 } => {
-                    let timing = (timing as usize).min(mono.len()).max(cursor);
-                    if let Err(error) = self.processor.render(&mut mono[cursor..timing]) {
+                    let timing = (timing as usize).min(block_len).max(cursor);
+                    if let Err(error) = self.processor.render_channels(channels, cursor..timing) {
                         return process_error(error);
                     }
                     cursor = timing;
@@ -176,8 +246,8 @@ impl Plugin for TinyViolinShowcase {
                     note,
                     ..
                 } => {
-                    let timing = (timing as usize).min(mono.len()).max(cursor);
-                    if let Err(error) = self.processor.render(&mut mono[cursor..timing]) {
+                    let timing = (timing as usize).min(block_len).max(cursor);
+                    if let Err(error) = self.processor.render_channels(channels, cursor..timing) {
                         return process_error(error);
                     }
                     cursor = timing;
@@ -190,10 +260,10 @@ impl Plugin for TinyViolinShowcase {
             }
         }
 
-        if let Err(error) = self.processor.render(&mut mono[cursor..]) {
+        if let Err(error) = self.processor.render_channels(channels, cursor..block_len) {
             return process_error(error);
         }
-        apply_gain_and_duplicate(channels, || self.params.master_gain.smoothed.next());
+        apply_gain(channels, || self.params.master_gain.smoothed.next());
 
         ProcessStatus::KeepAlive
     }
@@ -210,9 +280,14 @@ impl ClapPlugin for TinyViolinShowcase {
     const CLAP_SUPPORT_URL: Option<&'static str> = None;
     const CLAP_FEATURES: &'static [ClapFeature] = &[
         ClapFeature::Instrument,
+        ClapFeature::AudioEffect,
         ClapFeature::Synthesizer,
+        ClapFeature::MultiEffects,
+        ClapFeature::Reverb,
+        ClapFeature::Distortion,
         ClapFeature::Stereo,
         ClapFeature::Mono,
+        ClapFeature::Surround,
     ];
 }
 
@@ -221,8 +296,10 @@ impl Vst3Plugin for TinyViolinShowcase {
     const VST3_CLASS_ID: [u8; 16] = *b"TinyViolinSynth1";
     const VST3_SUBCATEGORIES: &'static [Vst3SubCategory] = &[
         Vst3SubCategory::Instrument,
+        Vst3SubCategory::Fx,
         Vst3SubCategory::Synth,
-        Vst3SubCategory::Stereo,
+        Vst3SubCategory::Reverb,
+        Vst3SubCategory::Distortion,
     ];
 }
 
@@ -232,7 +309,32 @@ nice_export_vst3!(TinyViolinShowcase);
 
 #[cfg(test)]
 mod tests {
-    use super::ShowcaseParams;
+    use super::{MAX_PLUGIN_CHANNELS, ShowcaseParams, TinyViolinShowcase};
+    use nice_plug::prelude::Plugin;
+
+    #[test]
+    fn plugin_accepts_matched_input_output_layouts_through_vst3_limit() {
+        let layouts = <TinyViolinShowcase as Plugin>::AUDIO_IO_LAYOUTS;
+        assert_eq!(layouts.len(), MAX_PLUGIN_CHANNELS);
+        assert_eq!(layouts[0].main_input_channels.unwrap().get(), 2);
+        assert_eq!(layouts[1].main_input_channels.unwrap().get(), 1);
+        for layout in layouts {
+            assert_eq!(layout.main_input_channels, layout.main_output_channels);
+        }
+        assert_eq!(
+            layouts.last().unwrap().main_input_channels.unwrap().get(),
+            63
+        );
+    }
+
+    #[test]
+    fn effects_are_bypassed_by_default_with_useful_control_values() {
+        let params = ShowcaseParams::default();
+        assert!(!params.reverb_enabled.value());
+        assert!((params.reverb_amount.value() - 0.25).abs() < f32::EPSILON);
+        assert!(!params.distortion_enabled.value());
+        assert!((params.distortion_drive.value() - 4.0).abs() < f32::EPSILON);
+    }
 
     #[test]
     fn master_gain_moves_smoothly_to_a_new_target() {

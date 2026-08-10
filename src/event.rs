@@ -45,12 +45,26 @@ impl TimedEvent {
 }
 
 /// A configuration or event-stream error.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProcessError {
     /// The sample rate was non-finite, below 1 Hz, or above 768 kHz.
     InvalidSampleRate,
     /// A zero-sized voice pool was requested.
     ZeroVoices,
+    /// A zero-channel audio processor was requested.
+    ZeroChannels,
+    /// A zero-sized MIDI mapping layer set was requested.
+    ZeroMidiLayers,
+    /// A processing block did not match the configured channel count.
+    ChannelCountMismatch,
+    /// Channels in a processing block had different lengths.
+    ChannelLengthMismatch,
+    /// A requested frame range was reversed or outside the block.
+    InvalidFrameRange,
+    /// Reverb amount was non-finite or outside `0.0..=1.0`.
+    InvalidReverbAmount,
+    /// Distortion drive was non-finite or outside `1.0..=20.0`.
+    InvalidDistortionDrive,
     /// A note frequency was not positive and finite.
     InvalidFrequency,
     /// A gain was non-finite or outside `0.0..=1.0`.
@@ -66,6 +80,13 @@ impl core::fmt::Display for ProcessError {
         f.write_str(match self {
             Self::InvalidSampleRate => "sample rate must be finite and in 1..=768000 Hz",
             Self::ZeroVoices => "voice capacity must be nonzero",
+            Self::ZeroChannels => "audio channel count must be nonzero",
+            Self::ZeroMidiLayers => "MIDI layer capacity must be nonzero",
+            Self::ChannelCountMismatch => "audio block channel count does not match configuration",
+            Self::ChannelLengthMismatch => "audio channels must have equal lengths",
+            Self::InvalidFrameRange => "frame range is outside the audio block",
+            Self::InvalidReverbAmount => "reverb amount must be finite and in 0..=1",
+            Self::InvalidDistortionDrive => "distortion drive must be finite and in 1..=20",
             Self::InvalidFrequency => "frequency must be positive and finite",
             Self::InvalidGain => "gain must be finite and in 0..=1",
             Self::EventsNotOrdered => "events must be ordered by sample offset",

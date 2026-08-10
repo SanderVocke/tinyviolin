@@ -1,9 +1,6 @@
 # tinyviolin
 
-`tinyviolin` is a small dependency-free Rust library for generated mono
-instrument sounds. It provides basic oscillators, melodic presets, percussion,
-fixed-capacity polyphony, sample-timed control events, and fixed-storage MIDI
-control.
+`tinyviolin` is a small dependency-free Rust library for generated instrument sounds and in-place multichannel audio processing. It is intended as a minimal demonstrator for integrating MIDI, synthesis, audio input mixing, and simple post-processing effects into music production software.
 
 ## Instruments
 
@@ -18,9 +15,7 @@ control.
 | `Snare` | Deterministic noise plus a pitched tone | 120–240 Hz |
 | `HiHat` | Bright deterministic noise plus metallic square waves | 4–8 kHz |
 
-The oscillators are intentionally elementary rather than band-limited. Very
-high oscillator frequencies can therefore alias. Frequencies are required to
-be positive and finite and are clamped below Nyquist during synthesis.
+The oscillators are intentionally elementary rather than band-limited, so very high oscillator frequencies can alias. Frequencies must be positive and finite and are clamped below Nyquist during synthesis.
 
 ## Direct event control
 
@@ -42,15 +37,9 @@ synth.process(&mut mono_buffer, &events)?;
 # Ok::<(), tinyviolin::ProcessError>(())
 ```
 
-`process` fills (rather than adds to) the supplied mono buffer. Buffer size is
-inferred from the slice. Timed events must be in nondecreasing offset order and
-may use `output.len()` to change state at the end of a block. The complete event
-slice is validated before output or engine state changes.
+`Synth::process` fills rather than adds to the supplied mono buffer. Buffer size is inferred from the slice. Timed events must be in nondecreasing offset order and may use `output.len()` to change state at the end of a block. The complete event slice is validated before output or engine state changes.
 
-A `VoiceId` identifies a logical note. A repeated note-on with the same ID
-restarts it, note-off releases it, and `AllNotesOff` releases every voice.
-Percussion voices also finish on their own. Configuration and stream errors are
-ordinary values and leave state unchanged when validation fails:
+A `VoiceId` identifies a logical note. A repeated note-on with the same ID restarts it, note-off releases it, and `AllNotesOff` releases every voice. Percussion voices also finish on their own. Configuration and stream errors are ordinary values and leave state unchanged when validation fails:
 
 ```rust
 use tinyviolin::{Event, Instrument, ProcessError, Synth, VoiceId};
@@ -67,10 +56,36 @@ assert_eq!(synth.active_voice_count(), 0);
 # Ok::<(), ProcessError>(())
 ```
 
+## Multichannel input and effects
+
+`AudioProcessor` configures any nonzero number of channels during setup. Processing is in-place: every channel slice initially contains that channel's audio input. The processor adds the same synthesized sample to every channel, then independently applies distortion followed by reverb to each input+synth mix.
+
+```rust
+use tinyviolin::{AudioProcessor, EffectSettings};
+
+let mut processor = AudioProcessor::<32>::new(48_000.0, 2)?;
+processor.set_effect_settings(EffectSettings {
+    reverb_enabled: true,
+    reverb_amount: 0.3,
+    distortion_enabled: true,
+    distortion_drive: 4.0,
+})?;
+
+let mut left = [0.0_f32; 128];
+let mut right = [0.0_f32; 128];
+processor.process(&mut [&mut left, &mut right], &[])?;
+# Ok::<(), tinyviolin::ProcessError>(())
+```
+
+Reverb has one dry/wet amount control in `0.0..=1.0`, and distortion has one linear drive control in `1.0..=20.0`. Each effect has an independent bypass toggle. Use `set_effect_settings` to replace all controls together, or use `set_reverb_enabled`, `set_reverb_amount`, `set_distortion_enabled`, and `set_distortion_drive` individually. Both effects are bypassed by default.
+
+`AudioProcessor::process` accepts sample-timed synthesis events for a complete block. `AudioProcessor::render_range` and `AudioProcessor::dispatch` support hosts that deliver events incrementally while traversing a block. Channel count, channel lengths, frame ranges, event timing, and effect values are validated before processing.
+
+`AudioProcessor<VOICES, MIDI_LAYERS>` also has fixed-storage MIDI mappings and accepts MIDI directly. Configure mappings with `set_midi_layer` or `set_midi_channel_layer`, use `dispatch_midi` for an immediate `MidiMessage`, and use `process_midi` for sample-timed `TimedMidiMessage`s. MIDI-triggered voices follow the same input+synth mixing and effects path as direct `Event`s. `AudioMidiError` distinguishes audio-block errors from MIDI message or timing errors.
+
 ## MIDI control
 
-The MIDI wrapper stores a direct mapping for each of 16 channels and 128 notes.
-Each key has a compile-time fixed number of layers. Mappings are empty initially.
+The standalone `MidiSynth` wrapper and the MIDI-capable `AudioProcessor` store a direct mapping for each of 16 channels and 128 notes. Each key has a compile-time fixed number of layers, and mappings are empty initially. `MidiSynth` produces mono synth-only output, while `AudioProcessor::process_midi` adds audio input and effects.
 
 ```rust
 use tinyviolin::Instrument;
@@ -99,31 +114,17 @@ synth.process(&mut mono_buffer, &messages)?;
 # Ok::<(), tinyviolin::midi::MidiError>(())
 ```
 
-Messages are copied into a length-tagged `[u8; 4]` backing store. The supported
-self-contained MIDI 1.0 messages are note-on, note-off, velocity-zero note-on,
-All Sound Off (CC 120), and All Notes Off (CC 123). Running status, `SysEx`, MIDI
-2.0 UMP, pitch bend, sustain, and general CC automation are not interpreted.
-Malformed and unsupported messages return an error. MIDI note-off identity is
-independent of the current mapping, so remapping cannot strand an active note.
+Messages are copied into a length-tagged `[u8; 4]` backing store. The supported self-contained MIDI 1.0 messages are note-on, note-off, velocity-zero note-on, All Sound Off (CC 120), and All Notes Off (CC 123). Running status, `SysEx`, MIDI 2.0 UMP, pitch bend, sustain, and general CC automation are not interpreted. Malformed and unsupported messages return an error. MIDI note-off identity is independent of the current mapping, so remapping cannot strand an active note.
 
 ## Real-time use and capacities
 
-- Construct `Synth`/`MidiSynth`, configure mappings, and prepare event storage
-  outside the audio callback.
-- `Synth::dispatch`, `Synth::process`, `MidiSynth::dispatch`, and
-  `MidiSynth::process` use fixed arrays and perform no allocation, locking, I/O,
-  or logging.
-- `Synth<VOICES>` caps simultaneous layers. When full, allocation uses an empty
-  voice first, then the oldest released voice, then the oldest active voice.
-- `MidiSynth<VOICES, LAYERS>` additionally fixes layers per channel/note. Its
-  direct lookup table trades a bounded amount of memory for constant-time lookup.
-- Sample rate is fixed for an engine's lifetime. Build a replacement engine away
-  from the callback if the host rate changes.
-- Output is mono `f32` in `-1.0..=1.0`; routing, panning, stereo duplication, and
-  device integration belong to the host application.
-- Passing prepared slices is allocation-free, but allocation of a caller's
-  `Vec` or queue is the caller's responsibility. A fixed-capacity SPSC queue is
-  a typical way to transfer events into an audio callback.
+- Construct `Synth`, `MidiSynth`, or `AudioProcessor`, configure mappings, and prepare event storage outside the audio callback. `AudioProcessor` construction allocates fixed-per-stream reverb delay storage for each channel.
+- Dispatch and processing methods perform no allocation, locking, I/O, or logging.
+- `Synth<VOICES>` caps simultaneous layers. When full, allocation uses an empty voice first, then the oldest released voice, then the oldest active voice.
+- `MidiSynth<VOICES, LAYERS>` additionally fixes layers per channel/note. Its direct lookup table trades a bounded amount of memory for constant-time lookup.
+- Sample rate and `AudioProcessor` channel count are fixed for an engine's lifetime. Build a replacement engine away from the callback when either changes.
+- `Synth` and `MidiSynth` produce mono `f32`. `AudioProcessor` processes any configured nonzero channel count in place. Successful output is bounded to `-1.0..=1.0`.
+- Passing prepared slices is allocation-free, but allocation of a caller's `Vec` or queue is the caller's responsibility. A fixed-capacity SPSC queue is a typical way to transfer events into an audio callback.
 
 ## Render example
 
@@ -131,16 +132,13 @@ independent of the current mapping, so remapping cannot strand an active note.
 cargo run --release --example render_wav
 ```
 
-This writes `rendered/tinyviolin_presets.wav`, with one labeled-in-source
-section per preset. It writes a file only and never opens an audio device.
+This writes `rendered/tinyviolin_presets.wav`, with one labeled-in-source section per preset. It writes a file only and never opens an audio device.
 
 ## Plugin and standalone showcase
 
-The `tinyviolin-showcase` workspace package wraps the library as a CLAP/VST3
-instrument and as a native nice-plug application. Its egui editor provides all
-ten presets, a smoothed master gain control, and a clickable two-octave piano.
-The core `tinyviolin` package remains the workspace's dependency-free default
-member.
+The `tinyviolin-showcase` workspace package wraps the library as a CLAP/VST3 instrument/effect and as a native nice-plug application. It exposes matched audio input/output layouts from mono through 63 channels, the maximum channel count representable by the VST3 layout wrapper. Synthesized sound is sent equally to every output channel, mixed with that channel's input, processed by distortion and reverb, and then scaled by master gain.
+
+The egui editor provides all ten presets, smoothed master gain, reverb bypass and amount, distortion bypass and drive, and a clickable two-octave piano. The same controls are exposed to plugin hosts with parameter IDs `preset`, `master-gain`, `reverb-enabled`, `reverb-amount`, `distortion-enabled`, and `distortion-drive`. The core `tinyviolin` package remains the workspace's dependency-free default member.
 
 Install the nice-plug bundler and build all release artifacts with:
 
@@ -149,24 +147,20 @@ cargo install cargo-nice-plug
 cargo nice-plug bundle tinyviolin-showcase --release --features standalone
 ```
 
-The bundles are written below `target/bundled/`. Run the native application with
-JACK using:
+The bundles are written below `target/bundled/`. Run the native application with JACK using:
 
 ```text
 cargo run -p tinyviolin-showcase --release --features standalone -- --backend jack
 ```
 
-A JACK server must already be running. The standalone wrapper also supports ALSA on Linux, `CoreAudio` on macOS, and
-WASAPI on Windows. Pass an empty device argument to list devices before choosing
-one, for example:
+A JACK server must already be running. The standalone wrapper also supports ALSA on Linux, `CoreAudio` on macOS, and WASAPI on Windows. Pass an empty device argument to list devices before choosing one, for example:
 
 ```text
 cargo run -p tinyviolin-showcase --features standalone -- --backend alsa --output-device ""
 cargo run -p tinyviolin-showcase --features standalone -- --backend alsa --midi-input ""
 ```
 
-On Debian or Ubuntu, compiling the JACK/OpenGL editor and standalone target
-requires:
+On Debian or Ubuntu, compiling the JACK/OpenGL editor and standalone target requires:
 
 ```text
 sudo apt-get install pkg-config libasound2-dev libgl-dev libjack-jackd2-dev \
@@ -174,21 +168,15 @@ sudo apt-get install pkg-config libasound2-dev libgl-dev libjack-jackd2-dev \
   libxcursor-dev libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev
 ```
 
-The showcase intentionally supports basic note-on, note-off, and choke events,
-not pitch bend, MPE, aftertouch, or general MIDI CC automation. Host notes are
-identified by channel and note, so overlapping instances of the same key
-retrigger one logical voice. Bass drum, tom, snare, and hi-hat use fixed pitches
-of 60, 130, 180, and 6000 Hz respectively; melodic presets use equal-tempered
-MIDI pitch. Preset changes apply to new notes while the master gain also affects
-held notes. On Windows, Cargo currently emits a harmless PDB filename-collision
-warning when building the same package's library and standalone binary together;
-the resulting executable and plugin bundles are distinct and usable.
+The showcase intentionally supports basic note-on, note-off, and choke events, not pitch bend, MPE, aftertouch, or general MIDI CC automation. Host notes are identified by channel and note, so overlapping instances of the same key retrigger one logical voice. Bass drum, tom, snare, and hi-hat use fixed pitches of 60, 130, 180, and 6000 Hz respectively; melodic presets use equal-tempered MIDI pitch. Preset changes apply to new notes, while effects and master gain affect the complete input+synth mix. On Windows, Cargo currently emits a harmless PDB filename-collision warning when building the same package's library and standalone binary together; the resulting executable and plugin bundles are distinct and usable.
 
 ## Development
 
 ```text
 cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test --all-targets
-cargo doc --no-deps
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --all-targets
+cargo test --workspace --doc
+cargo doc --workspace --no-deps
+cargo check -p tinyviolin-showcase --all-features --all-targets
 ```

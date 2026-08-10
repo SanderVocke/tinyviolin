@@ -1,12 +1,16 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+mod audio;
 mod dsp;
+mod effects;
 mod engine;
 mod event;
 mod instrument;
 pub mod midi;
 
+pub use audio::{AudioMidiError, AudioProcessor};
+pub use effects::EffectSettings;
 pub use engine::Synth;
 pub use event::{Event, ProcessError, TimedEvent, VoiceId};
 pub use instrument::Instrument;

@@ -47,6 +47,34 @@ pub(crate) fn create_editor(
                                 .with_width(180.0),
                         );
                     });
+                    ui.horizontal(|ui| {
+                        let mut reverb_enabled = params.reverb_enabled.value();
+                        if ui.checkbox(&mut reverb_enabled, "Reverb").changed() {
+                            setter.begin_set_parameter(&params.reverb_enabled);
+                            setter.set_parameter(&params.reverb_enabled, reverb_enabled);
+                            setter.end_set_parameter(&params.reverb_enabled);
+                        }
+                        ui.label("Amount");
+                        ui.add_enabled(
+                            reverb_enabled,
+                            widgets::ParamSlider::for_param(&params.reverb_amount, setter)
+                                .with_width(130.0),
+                        );
+
+                        ui.separator();
+                        let mut distortion_enabled = params.distortion_enabled.value();
+                        if ui.checkbox(&mut distortion_enabled, "Distortion").changed() {
+                            setter.begin_set_parameter(&params.distortion_enabled);
+                            setter.set_parameter(&params.distortion_enabled, distortion_enabled);
+                            setter.end_set_parameter(&params.distortion_enabled);
+                        }
+                        ui.label("Drive");
+                        ui.add_enabled(
+                            distortion_enabled,
+                            widgets::ParamSlider::for_param(&params.distortion_drive, setter)
+                                .with_width(130.0),
+                        );
+                    });
                     ui.add_space(12.0);
                     draw_keyboard(ui, keyboard);
                 });

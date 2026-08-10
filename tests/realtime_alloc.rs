@@ -3,7 +3,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tinyviolin::midi::{MidiLayer, MidiMessage, MidiPitch, MidiSynth, TimedMidiMessage};
-use tinyviolin::{Event, Instrument, Synth, TimedEvent, VoiceId};
+use tinyviolin::{AudioProcessor, EffectSettings, Event, Instrument, Synth, TimedEvent, VoiceId};
 
 struct CountingAllocator;
 
@@ -63,13 +63,42 @@ fn prepared_core_and_midi_processing_do_not_allocate() {
     ];
     let mut midi_output = [0.0; 256];
 
+    let mut audio = AudioProcessor::<8>::new(48_000.0, 3).unwrap();
+    audio
+        .set_effect_settings(EffectSettings {
+            reverb_enabled: true,
+            distortion_enabled: true,
+            ..EffectSettings::default()
+        })
+        .unwrap();
+    audio
+        .set_midi_layer(
+            0,
+            60,
+            0,
+            MidiLayer {
+                instrument: Instrument::Bass,
+                pitch: MidiPitch::Note,
+                gain: 0.5,
+            },
+        )
+        .unwrap();
+    let mut first = [0.0; 256];
+    let mut second = [0.1; 256];
+    let mut third = [-0.1; 256];
+    let mut audio_channels: [&mut [f32]; 3] = [&mut first, &mut second, &mut third];
+
     ALLOCATIONS.store(0, Ordering::SeqCst);
     TRACKING.store(true, Ordering::SeqCst);
     let core_result = core.process(&mut core_output, &core_events);
     let midi_result = midi.process(&mut midi_output, &midi_events);
+    let audio_result = audio.process(&mut audio_channels, &core_events);
+    let audio_midi_result = audio.process_midi(&mut audio_channels, &midi_events);
     TRACKING.store(false, Ordering::SeqCst);
 
     assert!(core_result.is_ok());
     assert!(midi_result.is_ok());
+    assert!(audio_result.is_ok());
+    assert!(audio_midi_result.is_ok());
     assert_eq!(ALLOCATIONS.load(Ordering::SeqCst), 0);
 }

@@ -167,8 +167,15 @@ impl<const VOICES: usize, const LAYERS: usize> MidiSynth<VOICES, LAYERS> {
         if LAYERS == 0 {
             return Err(MidiError::InvalidLayer);
         }
+        Self::from_synth(Synth::new(sample_rate)?)
+    }
+
+    pub(crate) fn from_synth(synth: Synth<VOICES>) -> Result<Self, MidiError> {
+        if LAYERS == 0 {
+            return Err(MidiError::InvalidLayer);
+        }
         Ok(Self {
-            synth: Synth::new(sample_rate)?,
+            synth,
             mappings: [[MidiMapping::EMPTY; 128]; 16],
         })
     }
@@ -177,6 +184,10 @@ impl<const VOICES: usize, const LAYERS: usize> MidiSynth<VOICES, LAYERS> {
     #[must_use]
     pub const fn engine(&self) -> &Synth<VOICES> {
         &self.synth
+    }
+
+    pub(crate) const fn engine_mut(&mut self) -> &mut Synth<VOICES> {
+        &mut self.synth
     }
 
     /// Set one channel/note mapping layer.
@@ -260,6 +271,12 @@ impl<const VOICES: usize, const LAYERS: usize> MidiSynth<VOICES, LAYERS> {
         let parsed = parse(message)?;
         self.dispatch_parsed(parsed);
         Ok(())
+    }
+
+    pub(crate) fn dispatch_validated(&mut self, message: MidiMessage) {
+        if let Ok(parsed) = parse(message) {
+            self.dispatch_parsed(parsed);
+        }
     }
 
     /// Fill a mono block while applying ordered MIDI messages at sample offsets.
@@ -383,7 +400,7 @@ fn parse(message: MidiMessage) -> Result<ParsedMessage, MidiError> {
     }
 }
 
-fn validate_timed_messages(
+pub(crate) fn validate_timed_messages(
     messages: &[TimedMidiMessage],
     output_len: usize,
 ) -> Result<(), MidiError> {

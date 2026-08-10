@@ -91,9 +91,16 @@ impl<const VOICES: usize> Synth<VOICES> {
 
     pub(crate) fn render(&mut self, output: &mut [f32]) {
         for sample in output {
-            let mixed = self.voices.iter_mut().map(Voice::next_sample).sum::<f32>();
-            *sample = mixed.clamp(-1.0, 1.0);
+            *sample = self.next_sample();
         }
+    }
+
+    pub(crate) fn next_sample(&mut self) -> f32 {
+        self.voices
+            .iter_mut()
+            .map(Voice::next_sample)
+            .sum::<f32>()
+            .clamp(-1.0, 1.0)
     }
 
     pub(crate) fn dispatch_validated(&mut self, event: Event) {
