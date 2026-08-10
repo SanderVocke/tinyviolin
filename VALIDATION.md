@@ -18,7 +18,7 @@ The deliverable is a complete `tinyviolin` Rust crate implementing `PLAN.md`: te
 | Wrapper for at-most-four-byte MIDI messages | `MidiMessage` uses `[u8; 4]` plus a length in `src/midi.rs`; parser and integration tests cover supported/malformed statuses and lengths. |
 | MIDI notes/channels map to instrument(s) and settings such as frequency | `MidiSynth` direct 16×128 table, fixed mapping layers, `MidiPitch::Note`/`Fixed`, gain, per-key and per-channel setup methods; layering/remapping tests in `tests/midi.rs`. |
 | Keep it simple | No runtime dependencies (`cargo tree` contains only `tinyviolin`), safe library Rust, mono output, fixed presets/capacities, no backend. |
-| GitHub Actions for major architectures and wasm | `.github/workflows/ci.yml` has stable quality gates and exact build entries for x86_64, i686, AArch64, ARMv7, and `wasm32-unknown-unknown` across Linux/Windows/macOS targets. All ten target commands build locally on stable. |
+| GitHub Actions for major architectures and wasm | `.github/workflows/ci.yml` has stable quality gates and exact build entries for x86_64, i686, AArch64, ARMv7, and `wasm32-unknown-unknown` across Linux/Windows/macOS targets. `actionlint` accepts the workflow, and all ten target commands build locally on stable. |
 | Usage and generated-output validation | `README.md` is included as crate rustdoc; three doctests pass. `examples/render_wav.rs` writes ten preset sections without opening an audio device. Programmatic WAV inspection confirms mono PCM16, 48 kHz, 480,000 frames/10 seconds, bounded samples, and non-silent signal in every section. |
 | Never play system audio | No audio backend dependency or playback code exists. The render example only writes a file. Manual system-audio audition remains explicitly skipped in `PLAN.md`. |
 
@@ -49,6 +49,7 @@ The final command set below was rerun from a detached clean worktree at commit `
 - `cargo +stable test --release`
 - `cargo +stable run --release --example render_wav`
 - `cargo +stable build --locked --release --lib --target <target>` for every target listed in acceptance criterion 11
+- `go run github.com/rhysd/actionlint/cmd/actionlint@latest .github/workflows/ci.yml`
 - `cargo tree` and a source scan for allocation, synchronization, and I/O primitives
 
 ## Explicitly skipped or blocked
