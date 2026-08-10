@@ -58,6 +58,39 @@ fn processing_is_consistent_across_different_buffer_lengths() {
 }
 
 #[test]
+fn simultaneous_notes_and_all_notes_off_have_release_tails() {
+    let mut synth = Synth::<4>::new(48_000.0).unwrap();
+    let events = [
+        TimedEvent::new(0, note_on(10, Instrument::Sine, 220.0)),
+        TimedEvent::new(0, note_on(11, Instrument::Triangle, 330.0)),
+    ];
+    let mut attack = [0.0; 64];
+    synth.process(&mut attack, &events).unwrap();
+    assert_eq!(synth.active_voice_count(), 2);
+    synth.dispatch(Event::AllNotesOff).unwrap();
+    assert_eq!(synth.active_voice_count(), 2);
+    let mut release = [0.0; 2_000];
+    synth.process(&mut release, &[]).unwrap();
+    assert!(release.iter().any(|sample| sample.abs() > 0.0));
+    assert_eq!(synth.active_voice_count(), 0);
+}
+
+#[test]
+fn event_beyond_block_is_rejected_before_mutation() {
+    let mut synth = Synth::<1>::new(48_000.0).unwrap();
+    let mut output = [0.75; 4];
+    assert_eq!(
+        synth.process(
+            &mut output,
+            &[TimedEvent::new(5, note_on(1, Instrument::Sine, 440.0))]
+        ),
+        Err(ProcessError::EventOutsideBlock)
+    );
+    assert!(output.iter().all(|sample| *sample == 0.75));
+    assert_eq!(synth.active_voice_count(), 0);
+}
+
+#[test]
 fn repeated_identity_retriggers_without_growing_polyphony() {
     let mut synth = Synth::<2>::new(48_000.0).unwrap();
     synth.dispatch(note_on(8, Instrument::Lead, 220.0)).unwrap();

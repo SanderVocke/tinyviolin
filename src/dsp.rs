@@ -296,6 +296,23 @@ mod tests {
     }
 
     #[test]
+    fn preset_envelopes_have_category_defining_timing() {
+        let mut pad = voice(Instrument::Pad, 220.0);
+        pad.elapsed_seconds = 0.05;
+        let early_pad = pad.unreleased_amplitude();
+        pad.elapsed_seconds = 0.35;
+        assert!(pad.unreleased_amplitude() > early_pad * 5.0);
+
+        let mut bass = voice(Instrument::Bass, 110.0);
+        bass.elapsed_seconds = 0.2;
+        assert!((bass.unreleased_amplitude() - 0.65).abs() < 0.001);
+
+        let mut hat = voice(Instrument::HiHat, 6_000.0);
+        hat.elapsed_seconds = 0.15;
+        assert_eq!(hat.unreleased_amplitude(), 0.0);
+    }
+
+    #[test]
     fn percussion_finishes_without_note_off() {
         for instrument in [
             Instrument::BassDrum,
