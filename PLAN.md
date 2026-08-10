@@ -111,7 +111,7 @@ Stages are ordered; each stage depends on the preceding stages unless explicitly
 - [x] Add build jobs for the exact native and WebAssembly targets in acceptance criterion 11, using native hosted runners where useful and target builds for the remaining pure-library artifacts.
 - [x] Cache Cargo data without relying on generated platform artifacts, pin actions to maintained major versions, and keep workflow permissions minimal.
 - [x] Reproduce the quality job on local stable Rust and successfully cross-build all ten exact matrix targets locally.
-- [ ] **Blocked:** verify every matrix entry in GitHub Actions; this repository has no Git remote, so the workflow cannot be pushed or observed in Actions from this environment.
+- [x] Verify every matrix entry in GitHub Actions; all quality and ten build jobs passed in [run 31376512275](https://github.com/SanderVocke/tinyviolin/actions/runs/31376512275).
 - [x] Fix only portability defects; do not conditionalize away instruments, MIDI behavior, or tests on supported targets.
 - [x] Commit the locally validated CI milestone.
 
@@ -120,7 +120,7 @@ Stages are ordered; each stage depends on the preceding stages unless explicitly
 - [x] Start from a clean checkout and run formatting, strict linting, all targets/tests/doctests, docs, release builds, the allocation tests, and the WAV render example.
 - [x] Audit every immutable acceptance criterion against code, tests, documentation, rendered output, local cross-builds, and available CI evidence; record the mapping and evidence in `VALIDATION.md`.
 - [x] Confirm public docs contain no unimplemented promises, the dependency tree remains empty at runtime, and no audio/MIDI call path allocates, locks, performs I/O, or panics for documented inputs.
-- [ ] **Blocked:** confirm the full architecture/OS/WASM Actions matrix is green; there is no configured Git remote or observable Actions run.
+- [x] Confirm the full architecture/OS/WASM Actions matrix is green in [run 31376512275](https://github.com/SanderVocke/tinyviolin/actions/runs/31376512275).
 - [x] Commit validation-only corrections as final meaningful milestones and leave the working tree clean.
 
 ## Execution contract

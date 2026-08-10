@@ -3,6 +3,7 @@ name = "tinyviolin"
 version = "0.1.0"
 edition = "2024"
 description = "Small real-time-safe synthesized instruments"
+repository = "https://github.com/SanderVocke/tinyviolin"
 keywords = ["audio", "synthesizer", "midi", "dsp"]
 categories = ["multimedia::audio"]
 

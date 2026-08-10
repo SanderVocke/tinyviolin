@@ -34,8 +34,8 @@ The deliverable is a complete `tinyviolin` Rust crate implementing `PLAN.md`: te
 8. **16×128 layered mapping with note/fixed pitch and reliable release:** covered by MIDI APIs and mapping/remapping/channel tests.
 9. **Required automated DSP/engine/MIDI properties:** covered by unit and integration suites in `src/*` and `tests/*`.
 10. **Runnable WAV example and integration guidance:** covered by `examples/render_wav.rs`, README, doctests, and file inspection.
-11. **Exact CI architecture/wasm matrix:** covered by `.github/workflows/ci.yml` and successful local cross-builds for every named target.
-12. **Stable local checks and green GitHub Actions:** stable local checks pass. GitHub Actions status is **unverified/blocking** because this local repository has no Git remote and therefore no Actions run to inspect.
+11. **Exact CI architecture/wasm matrix:** covered by `.github/workflows/ci.yml`, successful local cross-builds for every named target, and all ten hosted build jobs in [GitHub Actions run 31376512275](https://github.com/SanderVocke/tinyviolin/actions/runs/31376512275).
+12. **Stable local checks and green GitHub Actions:** stable local checks pass, and the hosted quality job plus the complete architecture/OS/wasm matrix passed in run 31376512275.
 
 ## Commands verified locally
 
@@ -52,7 +52,6 @@ The final command set below was rerun from a detached clean worktree at commit `
 - `go run github.com/rhysd/actionlint/cmd/actionlint@latest .github/workflows/ci.yml`
 - `cargo tree` and a source scan for allocation, synchronization, and I/O primitives
 
-## Explicitly skipped or blocked
+## Explicitly skipped
 
 - **Skipped:** Listening to the rendered WAV through system audio, per the user's prohibition. No playback command or audio device API was used.
-- **Blocked:** Observing a green GitHub Actions run. `git remote -v` returns no remote; a repository URL/push access or CI run evidence is required to close this gate.
