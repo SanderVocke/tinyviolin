@@ -7,6 +7,11 @@ repository = "https://github.com/SanderVocke/tinyviolin"
 keywords = ["audio", "synthesizer", "midi", "dsp"]
 categories = ["multimedia::audio"]
 
+[workspace]
+members = [".", "showcase"]
+default-members = ["."]
+resolver = "3"
+
 [dependencies]
 
 [lints.rust]

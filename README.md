@@ -134,6 +134,56 @@ cargo run --release --example render_wav
 This writes `rendered/tinyviolin_presets.wav`, with one labeled-in-source
 section per preset. It writes a file only and never opens an audio device.
 
+## Plugin and standalone showcase
+
+The `tinyviolin-showcase` workspace package wraps the library as a CLAP/VST3
+instrument and as a native nice-plug application. Its egui editor provides all
+ten presets, a smoothed master gain control, and a clickable two-octave piano.
+The core `tinyviolin` package remains the workspace's dependency-free default
+member.
+
+Install the nice-plug bundler and build all release artifacts with:
+
+```text
+cargo install cargo-nice-plug
+cargo nice-plug bundle tinyviolin-showcase --release --features standalone
+```
+
+The bundles are written below `target/bundled/`. Run the native application with
+JACK using:
+
+```text
+cargo run -p tinyviolin-showcase --release --features standalone -- --backend jack
+```
+
+A JACK server must already be running. The standalone wrapper also supports ALSA on Linux, `CoreAudio` on macOS, and
+WASAPI on Windows. Pass an empty device argument to list devices before choosing
+one, for example:
+
+```text
+cargo run -p tinyviolin-showcase --features standalone -- --backend alsa --output-device ""
+cargo run -p tinyviolin-showcase --features standalone -- --backend alsa --midi-input ""
+```
+
+On Debian or Ubuntu, compiling the JACK/OpenGL editor and standalone target
+requires:
+
+```text
+sudo apt-get install pkg-config libasound2-dev libgl-dev libjack-jackd2-dev \
+  libx11-xcb-dev libxcb1-dev libxcb-dri2-0-dev libxcb-icccm4-dev \
+  libxcursor-dev libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev
+```
+
+The showcase intentionally supports basic note-on, note-off, and choke events,
+not pitch bend, MPE, aftertouch, or general MIDI CC automation. Host notes are
+identified by channel and note, so overlapping instances of the same key
+retrigger one logical voice. Bass drum, tom, snare, and hi-hat use fixed pitches
+of 60, 130, 180, and 6000 Hz respectively; melodic presets use equal-tempered
+MIDI pitch. Preset changes apply to new notes while the master gain also affects
+held notes. On Windows, Cargo currently emits a harmless PDB filename-collision
+warning when building the same package's library and standalone binary together;
+the resulting executable and plugin bundles are distinct and usable.
+
 ## Development
 
 ```text

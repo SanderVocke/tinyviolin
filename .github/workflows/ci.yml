@@ -29,6 +29,29 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+  showcase:
+    name: Showcase (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install audio and GUI development libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libasound2-dev libgl-dev libjack-jackd2-dev \
+            libx11-xcb-dev libxcb1-dev libxcb-dri2-0-dev libxcb-icccm4-dev \
+            libxcursor-dev libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --locked -p tinyviolin-showcase --all-targets --features standalone -- -D warnings
+      - run: cargo test --locked -p tinyviolin-showcase --all-targets --features standalone
+      - run: cargo build --locked --release -p tinyviolin-showcase --all-targets --features standalone
+
   build:
     name: Build ${{ matrix.target }}
     strategy:

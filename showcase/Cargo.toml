@@ -1,0 +1,38 @@
+[package]
+name = "tinyviolin-showcase"
+version = "0.1.0"
+edition = "2024"
+description = "Plugin and standalone showcase for tinyviolin"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[[bin]]
+# nice-plug's bundler normalizes package dashes to underscores when locating binaries.
+name = "tinyviolin_showcase"
+path = "src/main.rs"
+required-features = ["standalone"]
+
+[features]
+default = ["vst3"]
+vst3 = ["nice-plug/vst3"]
+standalone = ["nice-plug/standalone"]
+
+[dependencies]
+baseview = { version = "0.2.0", features = ["opengl"] }
+egui = { version = "0.35.0", features = ["default_fonts"] }
+nice-plug = { version = "0.2.3", default-features = false, features = ["assert_process_allocs", "tracing-subscriber"] }
+nice-plug-egui = "0.3.0"
+rtrb = "0.3.3"
+tinyviolin = { path = ".." }
+
+[dev-dependencies]
+nice-assert-no-alloc = "1.0.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
