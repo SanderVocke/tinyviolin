@@ -5,7 +5,11 @@ use crate::engine::validate_events;
 use crate::midi::{
     MidiError, MidiLayer, MidiMessage, MidiSynth, TimedMidiMessage, validate_timed_messages,
 };
-use crate::{EffectSettings, Event, ProcessError, Synth, TimedEvent};
+use crate::state::{Reader, push_f32, push_u16, push_u32};
+use crate::{EffectSettings, Event, Preset, ProcessError, StateError, Synth, TimedEvent};
+
+const AUDIO_STATE_MAGIC: &[u8; 4] = b"TVAS";
+const AUDIO_STATE_VERSION: u16 = 1;
 
 /// A polyphonic synthesizer, per-channel input mixer, and post-effects chain.
 ///
@@ -108,7 +112,7 @@ impl<const VOICES: usize, const MIDI_LAYERS: usize> AudioProcessor<VOICES, MIDI_
         validate_effect_settings(settings)?;
         if settings.reverb_enabled != self.settings.reverb_enabled {
             for effects in &mut self.channel_effects {
-                effects.reset_reverb();
+                effects.reset_dsp();
             }
         }
         self.settings = settings;
@@ -119,7 +123,7 @@ impl<const VOICES: usize, const MIDI_LAYERS: usize> AudioProcessor<VOICES, MIDI_
     pub fn set_reverb_enabled(&mut self, enabled: bool) {
         if enabled != self.settings.reverb_enabled {
             for effects in &mut self.channel_effects {
-                effects.reset_reverb();
+                effects.reset_dsp();
             }
             self.settings.reverb_enabled = enabled;
         }
@@ -228,6 +232,109 @@ impl<const VOICES: usize, const MIDI_LAYERS: usize> AudioProcessor<VOICES, MIDI_
         self.midi.engine().active_voice_count()
     }
 
+    /// Return every preset available in this library version.
+    #[must_use]
+    pub const fn available_presets(&self) -> &'static [Preset] {
+        self.midi.available_presets()
+    }
+
+    /// Return the selected built-in preset, or `None` after manual mapping.
+    #[must_use]
+    pub const fn selected_preset(&self) -> Option<Preset> {
+        self.midi.selected_preset()
+    }
+
+    /// Replace all MIDI mappings with a built-in preset on every channel.
+    pub fn select_preset(&mut self, preset: Preset) {
+        self.midi.select_preset(preset);
+    }
+
+    /// Select a built-in preset by its stable runtime ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MidiError::UnknownPreset`] when the ID is not advertised by
+    /// [`Self::available_presets`].
+    pub fn select_preset_by_id(&mut self, id: &str) -> Result<(), MidiError> {
+        self.midi.select_preset_by_id(id)
+    }
+
+    /// Immediately clear voices, oscillators, and effect tails.
+    ///
+    /// MIDI mappings and effect settings are preserved. This host panic/reset
+    /// operation performs no allocation or locking.
+    pub fn reset_dsp(&mut self) {
+        self.midi.reset_dsp();
+        for effects in &mut self.channel_effects {
+            effects.reset_dsp();
+        }
+    }
+
+    /// Alias for [`Self::reset_dsp`] named after the conventional host action.
+    pub fn panic(&mut self) {
+        self.reset_dsp();
+    }
+
+    /// Serialize MIDI mappings, preset selection, and effect settings.
+    ///
+    /// Sample rate, channel layout, voices, oscillator phases, and effect tails
+    /// are intentionally omitted. This setup operation allocates the returned
+    /// byte vector for host session storage.
+    #[must_use]
+    pub fn serialize_state(&self) -> Vec<u8> {
+        let midi_state = self.midi.serialize_state();
+        let mut output = Vec::new();
+        output.extend_from_slice(AUDIO_STATE_MAGIC);
+        push_u16(&mut output, AUDIO_STATE_VERSION);
+        push_u32(
+            &mut output,
+            u32::try_from(midi_state.len()).unwrap_or(u32::MAX),
+        );
+        output.extend_from_slice(&midi_state);
+        output.push(u8::from(self.settings.reverb_enabled));
+        push_f32(&mut output, self.settings.reverb_amount);
+        output.push(u8::from(self.settings.distortion_enabled));
+        push_f32(&mut output, self.settings.distortion_drive);
+        output
+    }
+
+    /// Load configuration previously returned by [`Self::serialize_state`].
+    ///
+    /// Loading is transactional for malformed data and does not restore or
+    /// clear voices, oscillator phases, or effect tails. Call [`Self::reset_dsp`]
+    /// separately if loading a session should also silence the processor.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`StateError`] for malformed, unsupported, incompatible, or
+    /// invalid configuration data.
+    pub fn load_state(&mut self, state: &[u8]) -> Result<(), StateError> {
+        let mut reader = Reader::new(state);
+        if reader.read_exact(AUDIO_STATE_MAGIC.len())? != AUDIO_STATE_MAGIC {
+            return Err(StateError::InvalidData);
+        }
+        if reader.u16()? != AUDIO_STATE_VERSION {
+            return Err(StateError::UnsupportedVersion);
+        }
+        let midi_len = usize::try_from(reader.u32()?).map_err(|_| StateError::InvalidData)?;
+        let midi_state = reader.read_exact(midi_len)?;
+        let settings = EffectSettings {
+            reverb_enabled: read_bool(&mut reader)?,
+            reverb_amount: reader.f32()?,
+            distortion_enabled: read_bool(&mut reader)?,
+            distortion_drive: reader.f32()?,
+        };
+        if !reader.is_finished() {
+            return Err(StateError::InvalidData);
+        }
+        validate_effect_settings(settings).map_err(|_| StateError::InvalidConfiguration)?;
+        self.midi.load_state(midi_state)?;
+        // Validation above makes this infallible and preserves the usual
+        // reverb-toggle behavior.
+        self.set_effect_settings(settings)
+            .map_err(|_| StateError::InvalidConfiguration)
+    }
+
     /// Mix and process a complete in-place multichannel block with timed events.
     ///
     /// All channels must match the channel count selected in [`Self::new`] and
@@ -332,6 +439,14 @@ fn validate_channels(
     Ok(block_len)
 }
 
+fn read_bool(reader: &mut Reader<'_>) -> Result<bool, StateError> {
+    match reader.u8()? {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(StateError::InvalidConfiguration),
+    }
+}
+
 fn validate_effect_settings(settings: EffectSettings) -> Result<(), ProcessError> {
     if !settings.reverb_amount.is_finite() || !(0.0..=1.0).contains(&settings.reverb_amount) {
         return Err(ProcessError::InvalidReverbAmount);
@@ -349,7 +464,9 @@ mod tests {
 
     use super::{AudioMidiError, AudioProcessor};
     use crate::midi::{MidiError, MidiLayer, MidiMessage, MidiPitch, TimedMidiMessage};
-    use crate::{EffectSettings, Event, Instrument, ProcessError, TimedEvent, VoiceId};
+    use crate::{
+        EffectSettings, Event, Instrument, Preset, ProcessError, StateError, TimedEvent, VoiceId,
+    };
 
     fn note() -> Event {
         Event::NoteOn {
@@ -514,5 +631,69 @@ mod tests {
         assert_eq!(left, [0.25; 4]);
         assert_eq!(right, [0.5; 4]);
         assert_eq!(processor.active_voice_count(), 0);
+    }
+
+    #[test]
+    fn audio_state_round_trips_all_mutable_configuration() {
+        let mut source = AudioProcessor::<4, 1>::new(48_000.0, 2).unwrap();
+        source.select_preset(Preset::PercussionKit);
+        source
+            .set_effect_settings(EffectSettings {
+                reverb_enabled: true,
+                reverb_amount: 0.375,
+                distortion_enabled: true,
+                distortion_drive: 7.5,
+            })
+            .unwrap();
+        let state = source.serialize_state();
+
+        let mut restored = AudioProcessor::<4, 1>::new(44_100.0, 1).unwrap();
+        restored.load_state(&state).unwrap();
+        assert_eq!(restored.selected_preset(), Some(Preset::PercussionKit));
+        assert_eq!(restored.effect_settings(), source.effect_settings());
+        assert_eq!(restored.serialize_state(), state);
+        // Stream configuration is fixed by construction and not session state.
+        assert_eq!(restored.sample_rate(), 44_100.0);
+        assert_eq!(restored.channel_count(), 1);
+    }
+
+    #[test]
+    fn audio_state_errors_leave_configuration_unchanged() {
+        let mut processor = AudioProcessor::<2, 1>::new(48_000.0, 1).unwrap();
+        processor.select_preset(Preset::Lead);
+        processor.set_distortion_enabled(true);
+        let before = processor.serialize_state();
+        let mut corrupt = before.clone();
+        corrupt.push(0);
+
+        assert_eq!(processor.load_state(&corrupt), Err(StateError::InvalidData));
+        assert_eq!(processor.serialize_state(), before);
+    }
+
+    #[test]
+    fn audio_panic_clears_voices_and_effect_tails_but_not_configuration() {
+        let mut processor = AudioProcessor::<2, 1>::new(1_000.0, 1).unwrap();
+        processor.select_preset(Preset::Sine);
+        processor
+            .set_effect_settings(EffectSettings {
+                reverb_enabled: true,
+                reverb_amount: 1.0,
+                ..EffectSettings::default()
+            })
+            .unwrap();
+        processor
+            .dispatch_midi(MidiMessage::new(&[0x90, 60, 127]).unwrap())
+            .unwrap();
+        let mut sounding = [0.0; 100];
+        processor.process_midi(&mut [&mut sounding], &[]).unwrap();
+        assert!(sounding.iter().any(|sample| sample.abs() > 0.0));
+
+        processor.panic();
+        assert_eq!(processor.active_voice_count(), 0);
+        assert_eq!(processor.selected_preset(), Some(Preset::Sine));
+        assert!(processor.effect_settings().reverb_enabled);
+        let mut silent = [0.0; 100];
+        processor.process_midi(&mut [&mut silent], &[]).unwrap();
+        assert_eq!(silent, [0.0; 100]);
     }
 }

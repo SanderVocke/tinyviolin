@@ -8,12 +8,16 @@ mod engine;
 mod event;
 mod instrument;
 pub mod midi;
+mod preset;
+mod state;
 
 pub use audio::{AudioMidiError, AudioProcessor};
 pub use effects::EffectSettings;
 pub use engine::Synth;
 pub use event::{Event, ProcessError, TimedEvent, VoiceId};
 pub use instrument::Instrument;
+pub use preset::Preset;
+pub use state::StateError;
 
 #[cfg(test)]
 mod tests {

@@ -38,7 +38,7 @@ impl ChannelEffects {
         }
     }
 
-    pub(crate) fn reset_reverb(&mut self) {
+    pub(crate) fn reset_dsp(&mut self) {
         self.reverb.reset();
     }
 

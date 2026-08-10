@@ -3,7 +3,11 @@
 //! The wrapper accepts self-contained MIDI 1.0 messages. Running status, `SysEx`,
 //! and MIDI 2.0 UMP packets are intentionally outside its scope.
 
-use crate::{Event, Instrument, ProcessError, Synth, VoiceId};
+use crate::state::{Reader, push_f32, push_u16, push_u32};
+use crate::{Event, Instrument, Preset, ProcessError, StateError, Synth, VoiceId};
+
+const MIDI_STATE_MAGIC: &[u8; 4] = b"TVMS";
+const MIDI_STATE_VERSION: u16 = 1;
 
 /// Maximum accepted storage size for one self-contained MIDI 1.0 message.
 pub const MAX_MESSAGE_BYTES: usize = 4;
@@ -109,6 +113,8 @@ pub enum MidiError {
     InvalidTiming,
     /// The underlying synthesizer rejected configuration.
     Synth,
+    /// No currently available preset has the requested stable ID.
+    UnknownPreset,
 }
 
 impl core::fmt::Display for MidiError {
@@ -123,6 +129,7 @@ impl core::fmt::Display for MidiError {
             Self::InvalidLayerSettings => "MIDI layer frequency or gain is invalid",
             Self::InvalidTiming => "timed MIDI messages are unordered or outside the block",
             Self::Synth => "synthesizer rejected MIDI configuration",
+            Self::UnknownPreset => "unknown preset ID",
         })
     }
 }
@@ -135,7 +142,7 @@ impl From<ProcessError> for MidiError {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct MidiMapping<const LAYERS: usize> {
     layers: [Option<MidiLayer>; LAYERS],
 }
@@ -154,6 +161,7 @@ impl<const LAYERS: usize> MidiMapping<LAYERS> {
 pub struct MidiSynth<const VOICES: usize = 32, const LAYERS: usize = 2> {
     synth: Synth<VOICES>,
     mappings: [[MidiMapping<LAYERS>; 128]; 16],
+    selected_preset: Option<Preset>,
 }
 
 impl<const VOICES: usize, const LAYERS: usize> MidiSynth<VOICES, LAYERS> {
@@ -177,6 +185,7 @@ impl<const VOICES: usize, const LAYERS: usize> MidiSynth<VOICES, LAYERS> {
         Ok(Self {
             synth,
             mappings: [[MidiMapping::EMPTY; 128]; 16],
+            selected_preset: None,
         })
     }
 
@@ -188,6 +197,171 @@ impl<const VOICES: usize, const LAYERS: usize> MidiSynth<VOICES, LAYERS> {
 
     pub(crate) const fn engine_mut(&mut self) -> &mut Synth<VOICES> {
         &mut self.synth
+    }
+
+    /// Return every preset available in this library version.
+    #[must_use]
+    pub const fn available_presets(&self) -> &'static [Preset] {
+        Preset::available()
+    }
+
+    /// Return the selected built-in preset, or `None` after manual mapping.
+    #[must_use]
+    pub const fn selected_preset(&self) -> Option<Preset> {
+        self.selected_preset
+    }
+
+    /// Replace all channel/note mappings with a built-in preset.
+    ///
+    /// The preset is applied to all 16 MIDI channels. Additional mapping layers
+    /// are cleared. This setup operation performs bounded fixed-storage writes.
+    pub fn select_preset(&mut self, preset: Preset) {
+        for channel in &mut self.mappings {
+            for (note, mapping) in (0_u8..=127).zip(channel) {
+                *mapping = MidiMapping::EMPTY;
+                let instrument = preset.instrument(note);
+                mapping.layers[0] = Some(MidiLayer {
+                    instrument,
+                    pitch: if preset.uses_midi_pitch() {
+                        MidiPitch::Note
+                    } else {
+                        MidiPitch::Fixed(percussion_frequency(instrument))
+                    },
+                    gain: 1.0,
+                });
+            }
+        }
+        self.selected_preset = Some(preset);
+    }
+
+    /// Select a built-in preset by its stable runtime ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MidiError::UnknownPreset`] if the ID is not advertised by
+    /// [`Self::available_presets`].
+    pub fn select_preset_by_id(&mut self, id: &str) -> Result<(), MidiError> {
+        let preset = Preset::from_id(id).ok_or(MidiError::UnknownPreset)?;
+        self.select_preset(preset);
+        Ok(())
+    }
+
+    /// Immediately clear voice and oscillator state while preserving mappings.
+    pub fn reset_dsp(&mut self) {
+        self.synth.reset_dsp();
+    }
+
+    /// Alias for [`Self::reset_dsp`] named after the conventional host action.
+    pub fn panic(&mut self) {
+        self.reset_dsp();
+    }
+
+    /// Serialize MIDI mappings and preset selection for host session storage.
+    ///
+    /// Voice, oscillator, and other DSP state is intentionally omitted. This
+    /// setup operation allocates the returned byte vector.
+    #[must_use]
+    pub fn serialize_state(&self) -> Vec<u8> {
+        let mut output = Vec::new();
+        output.extend_from_slice(MIDI_STATE_MAGIC);
+        push_u16(&mut output, MIDI_STATE_VERSION);
+        push_u32(&mut output, u32::try_from(LAYERS).unwrap_or(u32::MAX));
+        if let Some(preset) = self.selected_preset {
+            let id = preset.id().as_bytes();
+            output.push(u8::try_from(id.len()).unwrap_or(u8::MAX));
+            output.extend_from_slice(id);
+        } else {
+            output.push(0);
+        }
+        for channel in &self.mappings {
+            for mapping in channel {
+                for layer in mapping.layers {
+                    match layer {
+                        None => output.push(0),
+                        Some(layer) => {
+                            output.push(1);
+                            output.push(instrument_code(layer.instrument));
+                            match layer.pitch {
+                                MidiPitch::Note => output.push(0),
+                                MidiPitch::Fixed(frequency) => {
+                                    output.push(1);
+                                    push_f32(&mut output, frequency);
+                                }
+                            }
+                            push_f32(&mut output, layer.gain);
+                        }
+                    }
+                }
+            }
+        }
+        output
+    }
+
+    /// Load MIDI configuration previously returned by [`Self::serialize_state`].
+    ///
+    /// Loading is transactional: malformed or incompatible data leaves mappings
+    /// unchanged. Existing voices and oscillator state are intentionally left
+    /// untouched; call [`Self::reset_dsp`] separately when a panic is desired.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`StateError`] for malformed, unsupported, incompatible, or
+    /// invalid configuration data.
+    pub fn load_state(&mut self, state: &[u8]) -> Result<(), StateError> {
+        let mut reader = Reader::new(state);
+        if reader.read_exact(MIDI_STATE_MAGIC.len())? != MIDI_STATE_MAGIC {
+            return Err(StateError::InvalidData);
+        }
+        if reader.u16()? != MIDI_STATE_VERSION {
+            return Err(StateError::UnsupportedVersion);
+        }
+        let layers = usize::try_from(reader.u32()?).map_err(|_| StateError::InvalidData)?;
+        if layers != LAYERS {
+            return Err(StateError::IncompatibleMidiLayers);
+        }
+        let preset_id_len = usize::from(reader.u8()?);
+        let selected_preset = if preset_id_len == 0 {
+            None
+        } else {
+            let id = core::str::from_utf8(reader.read_exact(preset_id_len)?)
+                .map_err(|_| StateError::InvalidData)?;
+            Preset::from_id(id)
+        };
+
+        let mut mappings = [[MidiMapping::EMPTY; 128]; 16];
+        for channel in &mut mappings {
+            for mapping in channel {
+                for layer in &mut mapping.layers {
+                    *layer = match reader.u8()? {
+                        0 => None,
+                        1 => {
+                            let instrument = instrument_from_code(reader.u8()?)
+                                .ok_or(StateError::InvalidConfiguration)?;
+                            let pitch = match reader.u8()? {
+                                0 => MidiPitch::Note,
+                                1 => MidiPitch::Fixed(reader.f32()?),
+                                _ => return Err(StateError::InvalidConfiguration),
+                            };
+                            let value = MidiLayer {
+                                instrument,
+                                pitch,
+                                gain: reader.f32()?,
+                            };
+                            validate_layer(value).map_err(|_| StateError::InvalidConfiguration)?;
+                            Some(value)
+                        }
+                        _ => return Err(StateError::InvalidConfiguration),
+                    };
+                }
+            }
+        }
+        if !reader.is_finished() {
+            return Err(StateError::InvalidData);
+        }
+
+        self.mappings = mappings;
+        self.selected_preset = selected_preset;
+        Ok(())
     }
 
     /// Set one channel/note mapping layer.
@@ -211,6 +385,7 @@ impl<const VOICES: usize, const LAYERS: usize> MidiSynth<VOICES, LAYERS> {
         }
         validate_layer(layer)?;
         self.mappings[slot.0][slot.1].layers[layer_index] = Some(layer);
+        self.selected_preset = None;
         Ok(())
     }
 
@@ -237,6 +412,7 @@ impl<const VOICES: usize, const LAYERS: usize> MidiSynth<VOICES, LAYERS> {
         for mapping in &mut self.mappings[usize::from(channel)] {
             mapping.layers[layer_index] = Some(layer);
         }
+        self.selected_preset = None;
         Ok(())
     }
 
@@ -256,6 +432,7 @@ impl<const VOICES: usize, const LAYERS: usize> MidiSynth<VOICES, LAYERS> {
             return Err(MidiError::InvalidLayer);
         }
         self.mappings[slot.0][slot.1].layers[layer_index] = None;
+        self.selected_preset = None;
         Ok(())
     }
 
@@ -437,6 +614,47 @@ fn validate_layer(layer: MidiLayer) -> Result<(), MidiError> {
     Ok(())
 }
 
+fn percussion_frequency(instrument: Instrument) -> f32 {
+    match instrument {
+        Instrument::BassDrum => 60.0,
+        Instrument::Tom => 130.0,
+        Instrument::Snare => 180.0,
+        Instrument::HiHat => 6_000.0,
+        _ => 440.0,
+    }
+}
+
+const fn instrument_code(instrument: Instrument) -> u8 {
+    match instrument {
+        Instrument::Sine => 0,
+        Instrument::Square => 1,
+        Instrument::Triangle => 2,
+        Instrument::Bass => 3,
+        Instrument::Pad => 4,
+        Instrument::Lead => 5,
+        Instrument::BassDrum => 6,
+        Instrument::Tom => 7,
+        Instrument::Snare => 8,
+        Instrument::HiHat => 9,
+    }
+}
+
+const fn instrument_from_code(code: u8) -> Option<Instrument> {
+    match code {
+        0 => Some(Instrument::Sine),
+        1 => Some(Instrument::Square),
+        2 => Some(Instrument::Triangle),
+        3 => Some(Instrument::Bass),
+        4 => Some(Instrument::Pad),
+        5 => Some(Instrument::Lead),
+        6 => Some(Instrument::BassDrum),
+        7 => Some(Instrument::Tom),
+        8 => Some(Instrument::Snare),
+        9 => Some(Instrument::HiHat),
+        _ => None,
+    }
+}
+
 fn midi_frequency(note: u8) -> f32 {
     440.0 * 2.0_f32.powf((f32::from(note) - 69.0) / 12.0)
 }
@@ -448,7 +666,10 @@ fn midi_voice_id(channel: u8, note: u8, layer_index: usize) -> VoiceId {
 
 #[cfg(test)]
 mod tests {
-    use super::{MidiError, MidiMessage, ParsedMessage, midi_frequency, parse};
+    use super::{
+        MidiError, MidiMessage, MidiPitch, MidiSynth, ParsedMessage, midi_frequency, parse,
+    };
+    use crate::{Instrument, Preset};
 
     fn message(bytes: &[u8]) -> MidiMessage {
         MidiMessage::new(bytes).unwrap()
@@ -516,5 +737,33 @@ mod tests {
     fn equal_tempered_pitch_has_expected_reference() {
         assert!((midi_frequency(69) - 440.0).abs() < f32::EPSILON);
         assert!((midi_frequency(81) - 880.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn percussion_preset_populates_one_synth_on_all_keys_and_channels() {
+        let mut midi = MidiSynth::<8, 2>::new(48_000.0).unwrap();
+        midi.select_preset(Preset::PercussionKit);
+
+        for channel in &midi.mappings {
+            for mapping in channel {
+                assert!(mapping.layers[0].is_some());
+                assert!(mapping.layers[1].is_none());
+            }
+        }
+        let channel = &midi.mappings[9];
+        assert_eq!(
+            channel[35].layers[0].unwrap().instrument,
+            Instrument::BassDrum
+        );
+        assert_eq!(channel[38].layers[0].unwrap().instrument, Instrument::Snare);
+        assert_eq!(channel[41].layers[0].unwrap().instrument, Instrument::Tom);
+        assert_eq!(channel[42].layers[0].unwrap().instrument, Instrument::HiHat);
+        assert_eq!(channel[44].layers[0].unwrap().instrument, Instrument::HiHat);
+        assert_eq!(channel[46].layers[0].unwrap().instrument, Instrument::HiHat);
+        assert_eq!(channel[49].layers[0].unwrap().instrument, Instrument::Tom);
+        assert_eq!(
+            channel[42].layers[0].unwrap().pitch,
+            MidiPitch::Fixed(6_000.0)
+        );
     }
 }

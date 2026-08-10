@@ -87,6 +87,8 @@ Reverb has one dry/wet amount control in `0.0..=1.0`, and distortion has one lin
 
 The standalone `MidiSynth` wrapper and the MIDI-capable `AudioProcessor` store a direct mapping for each of 16 channels and 128 notes. Each key has a compile-time fixed number of layers, and mappings are empty initially. `MidiSynth` produces mono synth-only output, while `AudioProcessor::process_midi` adds audio input and effects.
 
+Hosts can enumerate `Preset::available()` or call `available_presets()` on either MIDI-capable processor, display each preset's runtime `id()` and `name()`, and select it with `select_preset` or `select_preset_by_id`. Hosts therefore do not need to duplicate the library's preset list. Selecting a preset replaces mappings on every MIDI channel and clears extra layers.
+
 ```rust
 use tinyviolin::Instrument;
 use tinyviolin::midi::{
@@ -105,6 +107,9 @@ synth.set_layer(9, 36, 0, MidiLayer {
     gain: 0.8,
 })?;
 
+// Or select any preset discovered at runtime.
+synth.select_preset_by_id("percussion-kit")?;
+
 let messages = [TimedMidiMessage::new(
     0,
     MidiMessage::new(&[0x90, 60, 100])?,
@@ -114,11 +119,32 @@ synth.process(&mut mono_buffer, &messages)?;
 # Ok::<(), tinyviolin::midi::MidiError>(())
 ```
 
-Messages are copied into a length-tagged `[u8; 4]` backing store. The supported self-contained MIDI 1.0 messages are note-on, note-off, velocity-zero note-on, All Sound Off (CC 120), and All Notes Off (CC 123). Running status, `SysEx`, MIDI 2.0 UMP, pitch bend, sustain, and general CC automation are not interpreted. Malformed and unsupported messages return an error. MIDI note-off identity is independent of the current mapping, so remapping cannot strand an active note.
+Messages are copied into a length-tagged `[u8; 4]` backing store. The supported self-contained MIDI 1.0 messages are note-on, note-off, velocity-zero note-on, All Sound Off (CC 120), and All Notes Off (CC 123). Running status, `SysEx`, MIDI 2.0 UMP, pitch bend, sustain, and general MIDI CC automation are not interpreted. Malformed and unsupported messages return an error. MIDI note-off identity is independent of the current mapping, so remapping cannot strand an active note.
+
+The `percussion-kit` preset puts bass drums on General MIDI keys 35/36, snares on 38/40, toms on 41/43/45/47/48/50, and hi-hats on 42/44/46. Every other key carries the preceding supported assignment forward (with bass drum below key 35), so all 128 keys produce sound in one `MidiSynth`.
+
+## Panic and session state
+
+`Synth`, `MidiSynth`, and `AudioProcessor` provide `reset_dsp()` and its host-oriented `panic()` alias. A reset immediately clears voices and oscillator state. `AudioProcessor` additionally clears every effect tail. Sample rate, channel layout, MIDI mappings, selected preset, and effect settings are preserved.
+
+`MidiSynth::serialize_state` saves its mappings and selected preset. `AudioProcessor::serialize_state` additionally saves effect settings. The corresponding `load_state` methods validate the complete versioned binary payload before replacing configuration; malformed or capacity-incompatible state returns `StateError` and leaves configuration unchanged. DSP state, sample rate, and channel count are deliberately not serialized. Loading state does not panic the current DSP state, so a host can call `reset_dsp()` separately when desired.
+
+```rust
+use tinyviolin::{AudioProcessor, Preset};
+
+let mut source = AudioProcessor::<4, 1>::new(48_000.0, 2)?;
+source.select_preset(Preset::Pad);
+let session_bytes = source.serialize_state();
+drop(source);
+
+let mut restored = AudioProcessor::<4, 1>::new(48_000.0, 2)?;
+restored.load_state(&session_bytes)?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
 
 ## Real-time use and capacities
 
-- Construct `Synth`, `MidiSynth`, or `AudioProcessor`, configure mappings, and prepare event storage outside the audio callback. `AudioProcessor` construction allocates fixed-per-stream reverb delay storage for each channel.
+- Construct `Synth`, `MidiSynth`, or `AudioProcessor`, configure mappings, select presets, serialize/load session state, and prepare event storage outside the audio callback. `AudioProcessor` construction allocates fixed-per-stream reverb delay storage for each channel.
 - Dispatch and processing methods perform no allocation, locking, I/O, or logging.
 - `Synth<VOICES>` caps simultaneous layers. When full, allocation uses an empty voice first, then the oldest released voice, then the oldest active voice.
 - `MidiSynth<VOICES, LAYERS>` additionally fixes layers per channel/note. Its direct lookup table trades a bounded amount of memory for constant-time lookup.
@@ -132,13 +158,13 @@ Messages are copied into a length-tagged `[u8; 4]` backing store. The supported 
 cargo run --release --example render_wav
 ```
 
-This writes `rendered/tinyviolin_presets.wav`, with one labeled-in-source section per preset. It writes a file only and never opens an audio device.
+This writes `rendered/tinyviolin_presets.wav`, with one labeled-in-source section per synthesized instrument. It writes a file only and never opens an audio device.
 
 ## Plugin and standalone showcase
 
 The `tinyviolin-showcase` workspace package wraps the library as a CLAP/VST3 instrument/effect and as a native nice-plug application. It exposes matched audio input/output layouts from mono through 63 channels, the maximum channel count representable by the VST3 layout wrapper. Synthesized sound is sent equally to every output channel, mixed with that channel's input, processed by distortion and reverb, and then scaled by master gain.
 
-The egui editor provides all ten presets, smoothed master gain, reverb bypass and amount, distortion bypass and drive, and a clickable two-octave piano. The same controls are exposed to plugin hosts with parameter IDs `preset`, `master-gain`, `reverb-enabled`, `reverb-amount`, `distortion-enabled`, and `distortion-drive`. The core `tinyviolin` package remains the workspace's dependency-free default member.
+The egui editor provides all eleven presets, smoothed master gain, reverb bypass and amount, distortion bypass and drive, and a clickable two-octave piano. The same controls are exposed to plugin hosts with parameter IDs `preset`, `master-gain`, `reverb-enabled`, `reverb-amount`, `distortion-enabled`, and `distortion-drive`. The core `tinyviolin` package remains the workspace's dependency-free default member.
 
 Install the nice-plug bundler and build all release artifacts with:
 

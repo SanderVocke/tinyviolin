@@ -25,10 +25,13 @@ pub enum Preset {
     #[id = "hi-hat"]
     #[name = "Hi-Hat"]
     HiHat,
+    #[id = "percussion-kit"]
+    #[name = "Percussion Kit"]
+    PercussionKit,
 }
 
 impl Preset {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Sine,
         Self::Square,
         Self::Triangle,
@@ -39,10 +42,11 @@ impl Preset {
         Self::Tom,
         Self::Snare,
         Self::HiHat,
+        Self::PercussionKit,
     ];
 
     #[must_use]
-    pub const fn instrument(self) -> Instrument {
+    pub const fn instrument(self, midi_note: u8) -> Instrument {
         match self {
             Self::Sine => Instrument::Sine,
             Self::Square => Instrument::Square,
@@ -54,16 +58,17 @@ impl Preset {
             Self::Tom => Instrument::Tom,
             Self::Snare => Instrument::Snare,
             Self::HiHat => Instrument::HiHat,
+            Self::PercussionKit => tinyviolin::Preset::PercussionKit.instrument(midi_note),
         }
     }
 
     #[must_use]
     pub fn frequency_hz(self, midi_note: u8) -> f32 {
-        match self {
-            Self::BassDrum => 60.0,
-            Self::Tom => 130.0,
-            Self::Snare => 180.0,
-            Self::HiHat => 6_000.0,
+        match self.instrument(midi_note) {
+            Instrument::BassDrum => 60.0,
+            Instrument::Tom => 130.0,
+            Instrument::Snare => 180.0,
+            Instrument::HiHat => 6_000.0,
             _ => 440.0 * 2.0_f32.powf((f32::from(midi_note) - 69.0) / 12.0),
         }
     }
@@ -78,7 +83,7 @@ mod tests {
 
     #[test]
     fn all_presets_have_stable_ids_and_instrument_mappings() {
-        assert_eq!(Preset::variants().len(), 10);
+        assert_eq!(Preset::variants().len(), 11);
         assert_eq!(
             Preset::ids(),
             Some(
@@ -93,12 +98,13 @@ mod tests {
                     "tom",
                     "snare",
                     "hi-hat",
+                    "percussion-kit",
                 ]
                 .as_slice()
             )
         );
         assert_eq!(
-            Preset::ALL.map(Preset::instrument),
+            Preset::ALL.map(|preset| preset.instrument(60)),
             [
                 Instrument::Sine,
                 Instrument::Square,
@@ -110,6 +116,7 @@ mod tests {
                 Instrument::Tom,
                 Instrument::Snare,
                 Instrument::HiHat,
+                Instrument::Tom,
             ]
         );
     }
@@ -122,5 +129,8 @@ mod tests {
         assert_eq!(Preset::Tom.frequency_hz(127), 130.0);
         assert_eq!(Preset::Snare.frequency_hz(60), 180.0);
         assert_eq!(Preset::HiHat.frequency_hz(60), 6_000.0);
+        assert_eq!(Preset::PercussionKit.instrument(36), Instrument::BassDrum);
+        assert_eq!(Preset::PercussionKit.instrument(38), Instrument::Snare);
+        assert_eq!(Preset::PercussionKit.instrument(42), Instrument::HiHat);
     }
 }

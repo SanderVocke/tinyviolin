@@ -119,6 +119,23 @@ fn full_pool_remains_bounded_and_percussion_expires() {
 }
 
 #[test]
+fn dsp_reset_silences_synth_immediately() {
+    let mut synth = Synth::<2>::new(48_000.0).unwrap();
+    synth.dispatch(note_on(1, Instrument::Pad, 220.0)).unwrap();
+    assert_eq!(synth.active_voice_count(), 1);
+    synth.reset_dsp();
+    assert_eq!(synth.active_voice_count(), 0);
+
+    let mut output = [1.0; 32];
+    synth.process(&mut output, &[]).unwrap();
+    assert_eq!(output, [0.0; 32]);
+
+    synth.dispatch(note_on(2, Instrument::Sine, 440.0)).unwrap();
+    synth.panic();
+    assert_eq!(synth.active_voice_count(), 0);
+}
+
+#[test]
 fn block_end_event_affects_the_following_block() {
     let mut synth = Synth::<1>::new(48_000.0).unwrap();
     let mut empty = [];
