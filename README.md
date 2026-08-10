@@ -14,7 +14,7 @@ Or add it directly to your manifest:
 
 ```toml
 [dependencies]
-tinyviolin = "0.1.0"
+tinyviolin = "0.2.0"
 ```
 
 The minimum supported Rust version is 1.85.
