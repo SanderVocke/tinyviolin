@@ -78,13 +78,13 @@ Stages are ordered; each stage depends on the preceding stages unless explicitly
 
 ### Stage 3 — Polyphonic event-driven engine
 
-- [ ] Implement the fixed voice pool, voice lifecycle, stable note identities, note release, all-notes-off, and deterministic voice stealing.
-- [ ] Implement block processing that clears/fills the caller buffer, splits work at ordered event offsets without temporary allocation, mixes active voices, and applies the documented output bound.
-- [ ] Handle simultaneous events, zero-length buffers, block-edge events, percussion one-shots, repeated identities, and full-pool behavior deterministically.
-- [ ] Add integration tests for exact event timing, overlapping notes, release tails, pool exhaustion/stealing order, varying buffer lengths, and consistency across block boundaries.
-- [ ] Add a dedicated counting-allocator test proving zero allocations during prepared core event dispatch and processing.
-- [ ] Verify all core tests in debug and release modes and inspect the processing call graph for forbidden operations.
-- [ ] Commit the polyphonic engine milestone.
+- [x] Implement the fixed voice pool, voice lifecycle, stable note identities, note release, all-notes-off, and deterministic voice stealing.
+- [x] Implement block processing that clears/fills the caller buffer, splits work at ordered event offsets without temporary allocation, mixes active voices, and applies the documented output bound.
+- [x] Handle simultaneous events, zero-length buffers, block-edge events, percussion one-shots, repeated identities, and full-pool behavior deterministically.
+- [x] Add integration tests for exact event timing, overlapping notes, release tails, pool exhaustion/stealing order, varying buffer lengths, and consistency across block boundaries.
+- [x] Add a dedicated counting-allocator test proving zero allocations during prepared core event dispatch and processing.
+- [x] Verify all core tests in debug and release modes and inspect the processing call graph for forbidden operations.
+- [x] Commit the polyphonic engine milestone.
 
 ### Stage 4 — Fixed-capacity MIDI wrapper
 

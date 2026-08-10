@@ -10,7 +10,8 @@ categories = ["multimedia::audio"]
 [dependencies]
 
 [lints.rust]
-unsafe_code = "forbid"
+# The library independently forbids unsafe code. Integration instrumentation may use it.
+unsafe_code = "warn"
 
 [lints.clippy]
 all = "warn"
