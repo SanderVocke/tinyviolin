@@ -69,12 +69,12 @@ Stages are ordered; each stage depends on the preceding stages unless explicitly
 
 ### Stage 2 — DSP primitives and single-voice presets
 
-- [ ] Implement phase handling, sine/square/triangle generation, deterministic noise, and simple attack/decay/sustain/release or one-shot envelopes as private primitives.
-- [ ] Implement the ten instrument presets using the minimum category-defining mixes and pitch/amplitude modulation described in the design rules.
-- [ ] Ensure phase, envelope, PRNG, and frequency state are initialized before processing and reset deterministically when a voice is reused.
-- [ ] Add unit tests for waveform range/pitch, envelope transitions, percussion decay/pitch drop, deterministic noise, silence after completion, and non-finite input rejection.
-- [ ] Verify with formatting, linting, unit tests, and a release-mode test run.
-- [ ] Commit the DSP primitives and preset milestone.
+- [x] Implement phase handling, sine/square/triangle generation, deterministic noise, and simple attack/decay/sustain/release or one-shot envelopes as private primitives.
+- [x] Implement the ten instrument presets using the minimum category-defining mixes and pitch/amplitude modulation described in the design rules.
+- [x] Ensure phase, envelope, PRNG, and frequency state are initialized before processing and reset deterministically when a voice is reused.
+- [x] Add unit tests for waveform range/pitch, envelope transitions, percussion decay/pitch drop, deterministic noise, silence after completion, and non-finite input rejection.
+- [x] Verify with formatting, linting, unit tests, and a release-mode test run.
+- [x] Commit the DSP primitives and preset milestone.
 
 ### Stage 3 — Polyphonic event-driven engine
 

@@ -14,15 +14,27 @@ pub struct MidiMessage {
 
 impl MidiMessage {
     /// Copy a message of no more than four bytes into fixed storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MidiError::InvalidLength`] for an empty slice or one longer
+    /// than [`MAX_MESSAGE_BYTES`].
     pub fn new(bytes: &[u8]) -> Result<Self, MidiError> {
         if bytes.is_empty() || bytes.len() > MAX_MESSAGE_BYTES {
             return Err(MidiError::InvalidLength);
         }
         let mut storage = [0; MAX_MESSAGE_BYTES];
         storage[..bytes.len()].copy_from_slice(bytes);
+        let len = match bytes.len() {
+            1 => 1,
+            2 => 2,
+            3 => 3,
+            4 => 4,
+            _ => return Err(MidiError::InvalidLength),
+        };
         Ok(Self {
             bytes: storage,
-            len: bytes.len() as u8,
+            len,
         })
     }
 

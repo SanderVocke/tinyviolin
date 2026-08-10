@@ -1,4 +1,5 @@
-use crate::{Event, ProcessError, TimedEvent};
+use crate::dsp::Voice;
+use crate::{Event, ProcessError, TimedEvent, VoiceId};
 
 /// Fixed-capacity polyphonic synthesizer.
 ///
@@ -7,15 +8,18 @@ use crate::{Event, ProcessError, TimedEvent};
 pub struct Synth<const VOICES: usize = 32> {
     sample_rate: f32,
     voices: [Voice; VOICES],
+    age: u64,
 }
-
-#[derive(Clone, Copy, Default)]
-struct Voice;
 
 impl<const VOICES: usize> Synth<VOICES> {
     /// Create a silent engine with a fixed sample rate.
     ///
     /// Construction is a setup operation and is not part of the real-time API.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessError::InvalidSampleRate`] for a non-finite rate or one
+    /// outside 1–768,000 Hz, and [`ProcessError::ZeroVoices`] when `VOICES` is 0.
     pub fn new(sample_rate: f32) -> Result<Self, ProcessError> {
         if !sample_rate.is_finite() || !(1.0..=768_000.0).contains(&sample_rate) {
             return Err(ProcessError::InvalidSampleRate);
@@ -25,7 +29,8 @@ impl<const VOICES: usize> Synth<VOICES> {
         }
         Ok(Self {
             sample_rate,
-            voices: [Voice; VOICES],
+            voices: [Voice::EMPTY; VOICES],
+            age: 0,
         })
     }
 
@@ -35,30 +40,123 @@ impl<const VOICES: usize> Synth<VOICES> {
         self.sample_rate
     }
 
+    /// Return the number of voices that have not yet become silent.
+    #[must_use]
+    pub fn active_voice_count(&self) -> usize {
+        self.voices.iter().filter(|voice| voice.active).count()
+    }
+
     /// Apply one event immediately, before the next generated sample.
     ///
     /// This method performs no allocation or locking.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessError::InvalidFrequency`] or
+    /// [`ProcessError::InvalidGain`] for invalid note-on settings. No state is
+    /// changed when validation fails.
     pub fn dispatch(&mut self, event: Event) -> Result<(), ProcessError> {
-        validate_event(event)
+        validate_event(event)?;
+        self.dispatch_validated(event);
+        Ok(())
     }
 
     /// Fill a mono output block and apply ordered, sample-timed events.
     ///
     /// The method validates the complete event slice before changing engine or
     /// output state. It performs no allocation or locking. Output is always in
-    /// `-1.0..=1.0` when processing succeeds.
+    /// `-1.0..=1.0` when processing succeeds. Frequencies above the representable
+    /// audio band are deterministically clamped below Nyquist by each voice.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ProcessError`] if note settings are invalid, event offsets
+    /// are unordered, or an offset exceeds `output.len()`. Validation happens
+    /// before output or engine state changes.
     pub fn process(
         &mut self,
         output: &mut [f32],
         events: &[TimedEvent],
     ) -> Result<(), ProcessError> {
         validate_events(events, output.len())?;
-        output.fill(0.0);
-        for event in events {
-            self.dispatch(event.event)?;
+        let mut cursor = 0;
+        for timed in events {
+            self.render(&mut output[cursor..timed.sample_offset]);
+            self.dispatch_validated(timed.event);
+            cursor = timed.sample_offset;
         }
-        let _ = &self.voices;
+        self.render(&mut output[cursor..]);
         Ok(())
+    }
+
+    pub(crate) fn render(&mut self, output: &mut [f32]) {
+        for sample in output {
+            let mixed = self.voices.iter_mut().map(Voice::next_sample).sum::<f32>();
+            *sample = mixed.clamp(-1.0, 1.0);
+        }
+    }
+
+    pub(crate) fn dispatch_validated(&mut self, event: Event) {
+        match event {
+            Event::NoteOn {
+                id,
+                instrument,
+                frequency_hz,
+                gain,
+            } => {
+                self.stop_id(id);
+                let index = self.voice_for_start();
+                self.age = self.age.wrapping_add(1);
+                self.voices[index].start(
+                    id,
+                    instrument,
+                    frequency_hz,
+                    gain,
+                    self.sample_rate,
+                    self.age,
+                );
+            }
+            Event::NoteOff(id) => self.release_id(id),
+            Event::AllNotesOff => {
+                for voice in &mut self.voices {
+                    voice.release();
+                }
+            }
+        }
+    }
+
+    pub(crate) fn release_id(&mut self, id: VoiceId) {
+        for voice in &mut self.voices {
+            if voice.active && voice.id == id {
+                voice.release();
+            }
+        }
+    }
+
+    pub(crate) fn stop_id(&mut self, id: VoiceId) {
+        for voice in &mut self.voices {
+            if voice.active && voice.id == id {
+                voice.stop();
+            }
+        }
+    }
+
+    fn voice_for_start(&self) -> usize {
+        if let Some(index) = self.voices.iter().position(|voice| !voice.active) {
+            return index;
+        }
+        self.voices
+            .iter()
+            .enumerate()
+            .filter(|(_, voice)| voice.released)
+            .min_by_key(|(_, voice)| voice.started_at)
+            .or_else(|| {
+                self.voices
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, voice)| voice.started_at)
+            })
+            .map_or(0, |(index, _)| index)
     }
 }
 
@@ -93,4 +191,52 @@ pub(crate) fn validate_events(
         previous = event.sample_offset;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Synth;
+    use crate::{Event, Instrument, VoiceId};
+
+    fn note(id: u64) -> Event {
+        Event::NoteOn {
+            id: VoiceId(id),
+            instrument: Instrument::Sine,
+            frequency_hz: 440.0,
+            gain: 0.5,
+        }
+    }
+
+    #[test]
+    fn invalid_note_settings_do_not_change_state() {
+        let mut synth = Synth::<2>::new(48_000.0).unwrap();
+        let mut invalid = note(1);
+        if let Event::NoteOn {
+            ref mut frequency_hz,
+            ..
+        } = invalid
+        {
+            *frequency_hz = f32::NAN;
+        }
+        assert_eq!(
+            synth.dispatch(invalid),
+            Err(crate::ProcessError::InvalidFrequency)
+        );
+        assert_eq!(synth.active_voice_count(), 0);
+    }
+
+    #[test]
+    fn stealing_prefers_released_then_oldest() {
+        let mut synth = Synth::<2>::new(48_000.0).unwrap();
+        synth.dispatch(note(1)).unwrap();
+        synth.dispatch(note(2)).unwrap();
+        synth.dispatch(Event::NoteOff(VoiceId(2))).unwrap();
+        synth.dispatch(note(3)).unwrap();
+        assert!(synth.voices.iter().any(|voice| voice.id == VoiceId(1)));
+        assert!(synth.voices.iter().any(|voice| voice.id == VoiceId(3)));
+
+        synth.dispatch(note(4)).unwrap();
+        assert!(synth.voices.iter().any(|voice| voice.id == VoiceId(3)));
+        assert!(synth.voices.iter().any(|voice| voice.id == VoiceId(4)));
+    }
 }

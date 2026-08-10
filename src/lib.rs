@@ -7,6 +7,7 @@
 //! The sample rate is fixed for an engine's lifetime; create engines and MIDI
 //! mappings outside the audio callback.
 
+mod dsp;
 mod engine;
 mod event;
 mod instrument;
