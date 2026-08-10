@@ -107,12 +107,13 @@ Stages are ordered; each stage depends on the preceding stages unless explicitly
 
 ### Stage 6 — Cross-platform GitHub Actions
 
-- [ ] Add a workflow for `cargo fmt --check`, strict Clippy, tests/doctests, and documentation on stable Rust.
-- [ ] Add build jobs for the exact native and WebAssembly targets in acceptance criterion 11, using native hosted runners where useful and target builds for the remaining pure-library artifacts.
-- [ ] Cache Cargo data without relying on generated platform artifacts, pin actions to maintained major versions, and keep workflow permissions minimal.
-- [ ] Reproduce the workflow commands locally where the host permits and verify every matrix entry in GitHub Actions.
-- [ ] Fix only portability defects; do not conditionalize away instruments, MIDI behavior, or tests on supported targets.
-- [ ] Commit the green CI milestone.
+- [x] Add a workflow for `cargo fmt --check`, strict Clippy, tests/doctests, and documentation on stable Rust.
+- [x] Add build jobs for the exact native and WebAssembly targets in acceptance criterion 11, using native hosted runners where useful and target builds for the remaining pure-library artifacts.
+- [x] Cache Cargo data without relying on generated platform artifacts, pin actions to maintained major versions, and keep workflow permissions minimal.
+- [x] Reproduce the quality job on local stable Rust and successfully cross-build all ten exact matrix targets locally.
+- [ ] **Blocked:** verify every matrix entry in GitHub Actions; this repository has no Git remote, so the workflow cannot be pushed or observed in Actions from this environment.
+- [x] Fix only portability defects; do not conditionalize away instruments, MIDI behavior, or tests on supported targets.
+- [x] Commit the locally validated CI milestone.
 
 ### Stage 7 — Final end-to-end validation
 
