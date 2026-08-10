@@ -117,11 +117,11 @@ Stages are ordered; each stage depends on the preceding stages unless explicitly
 
 ### Stage 7 — Final end-to-end validation
 
-- [ ] Start from a clean checkout and run formatting, strict linting, all targets/tests/doctests, docs, release builds, the allocation tests, and the WAV render example.
-- [ ] Recheck every immutable acceptance criterion against code, tests, documentation, rendered output, and CI evidence; record the evidence in the final change summary.
-- [ ] Confirm public docs contain no unimplemented promises, the dependency tree remains empty at runtime, and no audio/MIDI call path allocates, locks, performs I/O, or panics for documented inputs.
-- [ ] Confirm the full architecture/OS/WASM Actions matrix is green.
-- [ ] Commit any validation-only corrections as a final meaningful milestone and leave the working tree clean.
+- [x] Start from a clean checkout and run formatting, strict linting, all targets/tests/doctests, docs, release builds, the allocation tests, and the WAV render example.
+- [x] Audit every immutable acceptance criterion against code, tests, documentation, rendered output, local cross-builds, and available CI evidence; record the mapping and evidence in `VALIDATION.md`.
+- [x] Confirm public docs contain no unimplemented promises, the dependency tree remains empty at runtime, and no audio/MIDI call path allocates, locks, performs I/O, or panics for documented inputs.
+- [ ] **Blocked:** confirm the full architecture/OS/WASM Actions matrix is green; there is no configured Git remote or observable Actions run.
+- [x] Commit validation-only corrections as final meaningful milestones and leave the working tree clean.
 
 ## Execution contract
 

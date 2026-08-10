@@ -39,6 +39,8 @@ The deliverable is a complete `tinyviolin` Rust crate implementing `PLAN.md`: te
 
 ## Commands verified locally
 
+The final command set below was rerun from a detached clean worktree at commit `87a0b85`; it completed with `CLEAN CHECKOUT VALIDATION PASSED` and introduced only ignored build/render artifacts.
+
 - `cargo +stable fmt --check`
 - `cargo +stable clippy --all-targets -- -D warnings`
 - `cargo +stable test --locked --all-targets`
