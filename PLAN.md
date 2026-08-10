@@ -88,13 +88,13 @@ Stages are ordered; each stage depends on the preceding stages unless explicitly
 
 ### Stage 4 — Fixed-capacity MIDI wrapper
 
-- [ ] Implement validated length-tagged MIDI messages with a four-byte maximum and parsing for the in-scope MIDI 1.0 channel messages.
-- [ ] Implement direct channel/note mapping storage, fixed layering, equal-tempered or fixed-frequency pitch selection, gain/velocity handling, and setup-time mapping mutation APIs.
-- [ ] Connect MIDI note lifecycle to stable `(channel, note)` identities so layered note-offs and all-notes/all-sound-off release the correct voices.
-- [ ] Provide timed MIDI block processing without constructing an intermediate heap collection.
-- [ ] Test every included status, all channels, representative note boundaries/velocities, layers, remapping behavior, malformed/unsupported data, event offsets, and pool overflow.
-- [ ] Extend the counting-allocator test to MIDI parsing, lookup, dispatch, and processing.
-- [ ] Verify formatting, linting, all tests, and API documentation; commit the MIDI wrapper milestone.
+- [x] Implement validated length-tagged MIDI messages with a four-byte maximum and parsing for the in-scope MIDI 1.0 channel messages.
+- [x] Implement direct channel/note mapping storage, fixed layering, equal-tempered or fixed-frequency pitch selection, gain/velocity handling, and setup-time mapping mutation APIs.
+- [x] Connect MIDI note lifecycle to stable `(channel, note)` identities so layered note-offs and all-notes/all-sound-off release the correct voices.
+- [x] Provide timed MIDI block processing without constructing an intermediate heap collection.
+- [x] Test every included status, all channels, representative note boundaries/velocities, layers, remapping behavior, malformed/unsupported data, event offsets, and pool overflow.
+- [x] Extend the counting-allocator test to MIDI parsing, lookup, dispatch, and processing.
+- [x] Verify formatting, linting, all tests, and API documentation; commit the MIDI wrapper milestone.
 
 ### Stage 5 — Usage documentation and audible validation
 
