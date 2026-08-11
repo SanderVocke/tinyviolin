@@ -59,7 +59,7 @@ synth.process(&mut mono_buffer, &events)?;
 
 `Synth::process` fills rather than adds to the supplied mono buffer. Buffer size is inferred from the slice. Timed events must be in nondecreasing offset order and may use `output.len()` to change state at the end of a block. The complete event slice is validated before output or engine state changes.
 
-A `VoiceId` identifies a logical note. A repeated note-on with the same ID restarts it, note-off releases it, and `AllNotesOff` releases every voice. Percussion voices also finish on their own. Configuration and stream errors are ordinary values and leave state unchanged when validation fails:
+A `VoiceId` identifies a logical note. A repeated note-on with the same ID restarts it, note-off releases it, and `AllNotesOff` releases every voice. For pluck and percussion voices, an early release request is deferred until the instrument's initial transient has played in full; a later request still releases the voice immediately. This makes short e-drum and trigger-pad taps sound complete without turning a held pluck into a fixed-length one-shot. Percussion voices also finish when their natural one-shot envelope ends. `reset_dsp`, `panic`, and MIDI All Sound Off remain immediate. Configuration and stream errors are ordinary values and leave state unchanged when validation fails:
 
 ```rust
 use tinyviolin::{Event, Instrument, ProcessError, Synth, VoiceId};

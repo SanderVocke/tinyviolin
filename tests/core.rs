@@ -166,6 +166,38 @@ fn controller_events_are_sample_accurate_and_prevalidated() {
 }
 
 #[test]
+fn short_taps_do_not_truncate_pluck_or_percussion_transients() {
+    for instrument in [
+        Instrument::Pluck,
+        Instrument::BassDrum,
+        Instrument::Tom,
+        Instrument::Snare,
+        Instrument::HiHat,
+    ] {
+        let mut tapped = Synth::<1>::new(1_000.0).unwrap();
+        let mut held = Synth::<1>::new(1_000.0).unwrap();
+        let note = note_on(7, instrument, 100.0);
+        let mut tapped_output = [0.0; 64];
+        let mut held_output = [0.0; 64];
+
+        tapped
+            .process(
+                &mut tapped_output,
+                &[
+                    TimedEvent::new(0, note),
+                    TimedEvent::new(8, Event::NoteOff(VoiceId(7))),
+                ],
+            )
+            .unwrap();
+        held.process(&mut held_output, &[TimedEvent::new(0, note)])
+            .unwrap();
+
+        assert_eq!(tapped_output, held_output, "{instrument:?}");
+        assert_eq!(tapped.active_voice_count(), 1, "{instrument:?}");
+    }
+}
+
+#[test]
 fn repeated_identity_retriggers_without_growing_polyphony() {
     let mut synth = Synth::<2>::new(48_000.0).unwrap();
     synth.dispatch(note_on(8, Instrument::Lead, 220.0)).unwrap();

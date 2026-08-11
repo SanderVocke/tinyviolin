@@ -18,7 +18,10 @@ pub enum Event {
         /// Finite linear gain in the inclusive range `0.0..=1.0`.
         gain: f32,
     },
-    /// Put all voices with this identity into their release phase.
+    /// Request release for all voices with this identity.
+    ///
+    /// Percussion and pluck voices defer an early request until their initial
+    /// transient has completed.
     NoteOff(VoiceId),
     /// Set the pitch offset for every active voice with this identity.
     PitchBend {
@@ -35,7 +38,9 @@ pub enum Event {
         /// Normalized modulation-wheel amount, in `0.0..=1.0`.
         amount: f32,
     },
-    /// Put every active voice into its release phase.
+    /// Request release for every active voice.
+    ///
+    /// Percussion and pluck voices still finish their protected transient.
     AllNotesOff,
 }
 
