@@ -9,6 +9,7 @@ const MODULATION_DEPTH_SEMITONES: f32 = 0.5;
 pub(crate) struct Voice {
     pub(crate) active: bool,
     pub(crate) released: bool,
+    release_pending: bool,
     pub(crate) id: VoiceId,
     pub(crate) started_at: u64,
     instrument: Instrument,
@@ -30,6 +31,7 @@ impl Voice {
     pub(crate) const EMPTY: Self = Self {
         active: false,
         released: false,
+        release_pending: false,
         id: VoiceId(0),
         started_at: 0,
         instrument: Instrument::Sine,
@@ -66,6 +68,7 @@ impl Voice {
         *self = Self {
             active: true,
             released: false,
+            release_pending: false,
             id,
             started_at,
             instrument,
@@ -85,11 +88,23 @@ impl Voice {
     }
 
     pub(crate) fn release(&mut self) {
-        if self.active && !self.released {
-            self.release_start = self.unreleased_amplitude();
-            self.released = true;
-            self.release_elapsed_seconds = 0.0;
+        if !self.active || self.released || self.release_pending {
+            return;
         }
+        if minimum_note_seconds(self.instrument)
+            .is_some_and(|minimum| self.elapsed_seconds < minimum)
+        {
+            self.release_pending = true;
+        } else {
+            self.begin_release();
+        }
+    }
+
+    fn begin_release(&mut self) {
+        self.release_start = self.unreleased_amplitude();
+        self.released = true;
+        self.release_pending = false;
+        self.release_elapsed_seconds = 0.0;
     }
 
     pub(crate) fn stop(&mut self) {
@@ -115,6 +130,13 @@ impl Voice {
     pub(crate) fn next_sample(&mut self) -> f32 {
         if !self.active {
             return 0.0;
+        }
+
+        if self.release_pending
+            && minimum_note_seconds(self.instrument)
+                .is_some_and(|minimum| self.elapsed_seconds >= minimum)
+        {
+            self.begin_release();
         }
 
         let amplitude = self.amplitude();
@@ -272,6 +294,15 @@ fn is_one_shot(instrument: Instrument) -> bool {
     one_shot_shape(instrument).is_some()
 }
 
+fn minimum_note_seconds(instrument: Instrument) -> Option<f32> {
+    if instrument == Instrument::Pluck {
+        let (attack, decay, _) = melodic_shape(instrument);
+        Some(attack + decay)
+    } else {
+        one_shot_shape(instrument).map(|(_, duration)| duration)
+    }
+}
+
 fn release_seconds(instrument: Instrument) -> f32 {
     match instrument {
         Instrument::Pluck => 0.18,
@@ -373,6 +404,49 @@ mod tests {
             assert!(!voice.active);
             assert_eq!(voice.next_sample(), 0.0);
         }
+    }
+
+    #[test]
+    fn early_release_does_not_truncate_protected_transients() {
+        for instrument in [
+            Instrument::Pluck,
+            Instrument::BassDrum,
+            Instrument::Tom,
+            Instrument::Snare,
+            Instrument::HiHat,
+        ] {
+            let mut released = voice(instrument, 220.0);
+            let mut held = voice(instrument, 220.0);
+            released.release();
+            assert!(released.release_pending);
+            assert!(!released.released);
+
+            let minimum = super::minimum_note_seconds(instrument).unwrap();
+            while released.elapsed_seconds < minimum {
+                assert_eq!(released.next_sample(), held.next_sample());
+            }
+            assert_eq!(released.next_sample(), held.next_sample());
+            assert!(released.released);
+
+            for _ in 0..48_000 {
+                released.next_sample();
+            }
+            assert!(!released.active);
+        }
+    }
+
+    #[test]
+    fn release_after_the_transient_starts_immediately() {
+        let mut pluck = voice(Instrument::Pluck, 330.0);
+        pluck.elapsed_seconds = super::minimum_note_seconds(Instrument::Pluck).unwrap();
+        pluck.release();
+        assert!(pluck.released);
+        assert!(!pluck.release_pending);
+
+        let mut melodic = voice(Instrument::Triangle, 330.0);
+        melodic.release();
+        assert!(melodic.released);
+        assert!(!melodic.release_pending);
     }
 
     #[test]
