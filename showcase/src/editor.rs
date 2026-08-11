@@ -75,6 +75,39 @@ pub(crate) fn create_editor(
                                 .with_width(130.0),
                         );
                     });
+                    ui.horizontal(|ui| {
+                        let mut compressor_enabled = params.compressor_enabled.value();
+                        if ui.checkbox(&mut compressor_enabled, "Compressor").changed() {
+                            setter.begin_set_parameter(&params.compressor_enabled);
+                            setter.set_parameter(&params.compressor_enabled, compressor_enabled);
+                            setter.end_set_parameter(&params.compressor_enabled);
+                        }
+                        ui.label("Amount");
+                        ui.add_enabled(
+                            compressor_enabled,
+                            widgets::ParamSlider::for_param(&params.compressor_amount, setter)
+                                .with_width(130.0),
+                        );
+                    });
+                    ui.horizontal(|ui| {
+                        let mut eq_enabled = params.eq_enabled.value();
+                        if ui.checkbox(&mut eq_enabled, "3-Band EQ").changed() {
+                            setter.begin_set_parameter(&params.eq_enabled);
+                            setter.set_parameter(&params.eq_enabled, eq_enabled);
+                            setter.end_set_parameter(&params.eq_enabled);
+                        }
+                        for (label, parameter) in [
+                            ("Low", &params.eq_low_db),
+                            ("Mid", &params.eq_mid_db),
+                            ("High", &params.eq_high_db),
+                        ] {
+                            ui.label(label);
+                            ui.add_enabled(
+                                eq_enabled,
+                                widgets::ParamSlider::for_param(parameter, setter).with_width(95.0),
+                            );
+                        }
+                    });
                     ui.add_space(12.0);
                     draw_keyboard(ui, keyboard);
                 });

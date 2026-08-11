@@ -11,6 +11,11 @@ fn prepared_showcase_processing_and_gui_drain_do_not_allocate() {
         .set_effect_settings(EffectSettings {
             reverb_enabled: true,
             distortion_enabled: true,
+            compressor_enabled: true,
+            eq_enabled: true,
+            eq_low_db: 2.0,
+            eq_mid_db: -1.0,
+            eq_high_db: 1.5,
             ..EffectSettings::default()
         })
         .unwrap();
@@ -31,7 +36,10 @@ fn prepared_showcase_processing_and_gui_drain_do_not_allocate() {
             audio_keyboard.synchronize(&mut processor, Preset::Pad, true),
             processor.render_channels(&mut first_channels, 0..96),
             processor.host_note_on(Preset::Pad, 3, 60, 0.8),
-            processor.host_note_off(3, 60),
+            processor
+                .host_pitch_bend(3, 1.0)
+                .and_then(|()| processor.host_mod_wheel(3, 1.0))
+                .and_then(|()| processor.host_note_off(3, 60)),
             processor.render_channels(&mut second_channels, 0..160),
         )
     });

@@ -2,6 +2,9 @@ use core::f32::consts::TAU;
 
 use crate::{Instrument, VoiceId};
 
+const MODULATION_RATE_HZ: f32 = 5.5;
+const MODULATION_DEPTH_SEMITONES: f32 = 0.5;
+
 #[derive(Clone, Copy)]
 pub(crate) struct Voice {
     pub(crate) active: bool,
@@ -10,6 +13,9 @@ pub(crate) struct Voice {
     pub(crate) started_at: u64,
     instrument: Instrument,
     frequency_hz: f32,
+    pitch_bend_semitones: f32,
+    modulation: f32,
+    control_group: Option<u8>,
     gain: f32,
     sample_rate: f32,
     elapsed_seconds: f32,
@@ -28,6 +34,9 @@ impl Voice {
         started_at: 0,
         instrument: Instrument::Sine,
         frequency_hz: 440.0,
+        pitch_bend_semitones: 0.0,
+        modulation: 0.0,
+        control_group: None,
         gain: 0.0,
         sample_rate: 48_000.0,
         elapsed_seconds: 0.0,
@@ -61,6 +70,9 @@ impl Voice {
             started_at,
             instrument,
             frequency_hz,
+            pitch_bend_semitones: 0.0,
+            modulation: 0.0,
+            control_group: None,
             gain,
             sample_rate,
             elapsed_seconds: 0.0,
@@ -84,6 +96,22 @@ impl Voice {
         self.active = false;
     }
 
+    pub(crate) fn set_pitch_bend(&mut self, semitones: f32) {
+        self.pitch_bend_semitones = semitones;
+    }
+
+    pub(crate) fn set_modulation(&mut self, amount: f32) {
+        self.modulation = amount;
+    }
+
+    pub(crate) fn set_control_group(&mut self, group: u8) {
+        self.control_group = Some(group);
+    }
+
+    pub(crate) const fn control_group(&self) -> Option<u8> {
+        self.control_group
+    }
+
     pub(crate) fn next_sample(&mut self) -> f32 {
         if !self.active {
             return 0.0;
@@ -93,13 +121,22 @@ impl Voice {
         if !self.active {
             return 0.0;
         }
-        let frequency = self
-            .frequency_at(self.elapsed_seconds)
-            .min(self.sample_rate * 0.49);
+        let vibrato = self.modulation
+            * MODULATION_DEPTH_SEMITONES
+            * (TAU * MODULATION_RATE_HZ * self.elapsed_seconds).sin();
+        let pitch_ratio = 2.0_f32.powf((self.pitch_bend_semitones + vibrato) / 12.0);
+        let frequency =
+            (self.frequency_at(self.elapsed_seconds) * pitch_ratio).min(self.sample_rate * 0.49);
         let raw = match self.instrument {
             Instrument::Sine | Instrument::BassDrum => sine(self.phase[0]),
             Instrument::Square => square(self.phase[0]),
             Instrument::Triangle => triangle(self.phase[0]),
+            Instrument::Pluck => {
+                let brightness = (-7.0 * self.elapsed_seconds).exp();
+                0.75 * triangle(self.phase[0])
+                    + 0.25 * brightness * triangle(self.phase[1])
+                    + 0.12 * brightness * self.next_noise()
+            }
             Instrument::Bass => 0.7 * sine(self.phase[0]) + 0.3 * triangle(self.phase[1]),
             Instrument::Pad => {
                 0.4 * sine(self.phase[0])
@@ -130,7 +167,7 @@ impl Voice {
 
     fn phase_ratios(&self) -> [f32; 3] {
         match self.instrument {
-            Instrument::Bass | Instrument::Lead => [1.0, 2.0, 1.0],
+            Instrument::Pluck | Instrument::Bass | Instrument::Lead => [1.0, 2.0, 1.0],
             Instrument::Pad => [1.0, 0.995, 1.005],
             Instrument::HiHat => [1.0, 1.371, 1.617],
             _ => [1.0; 3],
@@ -213,6 +250,7 @@ fn advance_phase(phase: f32, increment: f32) -> f32 {
 
 fn melodic_shape(instrument: Instrument) -> (f32, f32, f32) {
     match instrument {
+        Instrument::Pluck => (0.001, 0.7, 0.12),
         Instrument::Bass => (0.005, 0.12, 0.65),
         Instrument::Pad => (0.35, 0.4, 0.75),
         Instrument::Lead => (0.01, 0.08, 0.8),
@@ -236,6 +274,7 @@ fn is_one_shot(instrument: Instrument) -> bool {
 
 fn release_seconds(instrument: Instrument) -> f32 {
     match instrument {
+        Instrument::Pluck => 0.18,
         Instrument::Bass => 0.08,
         Instrument::Pad => 0.6,
         Instrument::Lead => 0.12,
@@ -262,6 +301,7 @@ mod tests {
             Instrument::Sine,
             Instrument::Square,
             Instrument::Triangle,
+            Instrument::Pluck,
             Instrument::Bass,
             Instrument::Pad,
             Instrument::Lead,
@@ -302,6 +342,12 @@ mod tests {
         let early_pad = pad.unreleased_amplitude();
         pad.elapsed_seconds = 0.35;
         assert!(pad.unreleased_amplitude() > early_pad * 5.0);
+
+        let mut pluck = voice(Instrument::Pluck, 330.0);
+        pluck.elapsed_seconds = 0.01;
+        let early_pluck = pluck.unreleased_amplitude();
+        pluck.elapsed_seconds = 0.71;
+        assert!(pluck.unreleased_amplitude() < early_pluck * 0.2);
 
         let mut bass = voice(Instrument::Bass, 110.0);
         bass.elapsed_seconds = 0.2;

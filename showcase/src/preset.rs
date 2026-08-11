@@ -9,6 +9,8 @@ pub enum Preset {
     Square,
     #[id = "triangle"]
     Triangle,
+    #[id = "pluck"]
+    Pluck,
     #[id = "bass"]
     Bass,
     #[id = "pad"]
@@ -31,10 +33,11 @@ pub enum Preset {
 }
 
 impl Preset {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Sine,
         Self::Square,
         Self::Triangle,
+        Self::Pluck,
         Self::Bass,
         Self::Pad,
         Self::Lead,
@@ -51,6 +54,7 @@ impl Preset {
             Self::Sine => Instrument::Sine,
             Self::Square => Instrument::Square,
             Self::Triangle => Instrument::Triangle,
+            Self::Pluck => Instrument::Pluck,
             Self::Bass => Instrument::Bass,
             Self::Pad => Instrument::Pad,
             Self::Lead => Instrument::Lead,
@@ -83,7 +87,7 @@ mod tests {
 
     #[test]
     fn all_presets_have_stable_ids_and_instrument_mappings() {
-        assert_eq!(Preset::variants().len(), 11);
+        assert_eq!(Preset::variants().len(), 12);
         assert_eq!(
             Preset::ids(),
             Some(
@@ -91,6 +95,7 @@ mod tests {
                     "sine",
                     "square",
                     "triangle",
+                    "pluck",
                     "bass",
                     "pad",
                     "lead",
@@ -109,6 +114,7 @@ mod tests {
                 Instrument::Sine,
                 Instrument::Square,
                 Instrument::Triangle,
+                Instrument::Pluck,
                 Instrument::Bass,
                 Instrument::Pad,
                 Instrument::Lead,

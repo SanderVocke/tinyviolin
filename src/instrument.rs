@@ -22,6 +22,8 @@ pub enum Instrument {
     Snare,
     /// A short bright metallic/noise preset.
     HiHat,
+    /// A quickly decaying, harmonically bright plucked-string preset.
+    Pluck,
 }
 
 impl Instrument {
@@ -39,6 +41,7 @@ impl Instrument {
             Self::Sine => 0.25,
             Self::Square => 0.165,
             Self::Triangle => 0.31,
+            Self::Pluck => 0.63,
             Self::Bass => 0.55,
             Self::Pad | Self::Tom => 0.65,
             Self::Lead => 0.325,

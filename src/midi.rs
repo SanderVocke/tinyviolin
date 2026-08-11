@@ -9,6 +9,9 @@ use crate::{Event, Instrument, Preset, ProcessError, StateError, Synth, VoiceId}
 const MIDI_STATE_MAGIC: &[u8; 4] = b"TVMS";
 const MIDI_STATE_VERSION: u16 = 1;
 
+/// Pitch-bend range used for MIDI pitch-wheel messages, in semitones.
+pub const PITCH_BEND_RANGE_SEMITONES: f32 = 2.0;
+
 /// Maximum accepted storage size for one self-contained MIDI 1.0 message.
 pub const MAX_MESSAGE_BYTES: usize = 4;
 
@@ -161,6 +164,8 @@ impl<const LAYERS: usize> MidiMapping<LAYERS> {
 pub struct MidiSynth<const VOICES: usize = 32, const LAYERS: usize = 2> {
     synth: Synth<VOICES>,
     mappings: [[MidiMapping<LAYERS>; 128]; 16],
+    pitch_bend_semitones: [f32; 16],
+    modulation: [f32; 16],
     selected_preset: Option<Preset>,
 }
 
@@ -185,6 +190,8 @@ impl<const VOICES: usize, const LAYERS: usize> MidiSynth<VOICES, LAYERS> {
         Ok(Self {
             synth,
             mappings: [[MidiMapping::EMPTY; 128]; 16],
+            pitch_bend_semitones: [0.0; 16],
+            modulation: [0.0; 16],
             selected_preset: None,
         })
     }
@@ -248,9 +255,12 @@ impl<const VOICES: usize, const LAYERS: usize> MidiSynth<VOICES, LAYERS> {
         Ok(())
     }
 
-    /// Immediately clear voice and oscillator state while preserving mappings.
+    /// Immediately clear voice and oscillator state, center pitch bend, and
+    /// turn modulation off while preserving mappings.
     pub fn reset_dsp(&mut self) {
         self.synth.reset_dsp();
+        self.pitch_bend_semitones.fill(0.0);
+        self.modulation.fill(0.0);
     }
 
     /// Alias for [`Self::reset_dsp`] named after the conventional host action.
@@ -500,17 +510,34 @@ impl<const VOICES: usize, const LAYERS: usize> MidiSynth<VOICES, LAYERS> {
                             MidiPitch::Note => midi_frequency(note),
                             MidiPitch::Fixed(frequency) => frequency,
                         };
+                        let id = midi_voice_id(channel, note, index);
                         self.synth.dispatch_validated(Event::NoteOn {
-                            id: midi_voice_id(channel, note, index),
+                            id,
                             instrument: layer.instrument,
                             frequency_hz,
                             gain: layer.gain * (f32::from(velocity) / 127.0),
                         });
+                        self.synth.assign_control_group(
+                            id,
+                            channel,
+                            self.pitch_bend_semitones[usize::from(channel)],
+                            self.modulation[usize::from(channel)],
+                        );
                     }
                 }
             }
             ParsedMessage::NoteOff { channel, note } => {
                 self.visit_note_ids(channel, note, false);
+            }
+            ParsedMessage::PitchBend { channel, value } => {
+                let semitones = pitch_bend_semitones(value);
+                self.pitch_bend_semitones[usize::from(channel)] = semitones;
+                self.synth.set_group_pitch_bend(channel, semitones);
+            }
+            ParsedMessage::ModWheel { channel, value } => {
+                let amount = f32::from(value) / 127.0;
+                self.modulation[usize::from(channel)] = amount;
+                self.synth.set_group_modulation(channel, amount);
             }
             ParsedMessage::AllNotesOff(channel) => {
                 for note in 0_u8..=127 {
@@ -541,6 +568,8 @@ impl<const VOICES: usize, const LAYERS: usize> MidiSynth<VOICES, LAYERS> {
 enum ParsedMessage {
     NoteOn { channel: u8, note: u8, velocity: u8 },
     NoteOff { channel: u8, note: u8 },
+    PitchBend { channel: u8, value: u16 },
+    ModWheel { channel: u8, value: u8 },
     AllNotesOff(u8),
     AllSoundOff(u8),
 }
@@ -552,7 +581,7 @@ fn parse(message: MidiMessage) -> Result<ParsedMessage, MidiError> {
         return Err(MidiError::MalformedMessage);
     }
     let kind = status & 0xf0;
-    if !matches!(kind, 0x80 | 0x90 | 0xb0) {
+    if !matches!(kind, 0x80 | 0x90 | 0xb0 | 0xe0) {
         return Err(MidiError::UnsupportedMessage);
     }
     if bytes.len() != 3 || bytes[1] >= 0x80 || bytes[2] >= 0x80 {
@@ -573,8 +602,16 @@ fn parse(message: MidiMessage) -> Result<ParsedMessage, MidiError> {
             note: bytes[1],
             velocity: bytes[2],
         }),
+        0xb0 if bytes[1] == 1 => Ok(ParsedMessage::ModWheel {
+            channel,
+            value: bytes[2],
+        }),
         0xb0 if bytes[1] == 120 => Ok(ParsedMessage::AllSoundOff(channel)),
         0xb0 if bytes[1] == 123 => Ok(ParsedMessage::AllNotesOff(channel)),
+        0xe0 => Ok(ParsedMessage::PitchBend {
+            channel,
+            value: u16::from(bytes[1]) | (u16::from(bytes[2]) << 7),
+        }),
         _ => Err(MidiError::UnsupportedMessage),
     }
 }
@@ -638,6 +675,7 @@ const fn instrument_code(instrument: Instrument) -> u8 {
         Instrument::Tom => 7,
         Instrument::Snare => 8,
         Instrument::HiHat => 9,
+        Instrument::Pluck => 10,
     }
 }
 
@@ -653,8 +691,15 @@ const fn instrument_from_code(code: u8) -> Option<Instrument> {
         7 => Some(Instrument::Tom),
         8 => Some(Instrument::Snare),
         9 => Some(Instrument::HiHat),
+        10 => Some(Instrument::Pluck),
         _ => None,
     }
+}
+
+fn pitch_bend_semitones(value: u16) -> f32 {
+    let centered = f32::from(value) - 8_192.0;
+    let divisor = if value < 8_192 { 8_192.0 } else { 8_191.0 };
+    (centered / divisor) * PITCH_BEND_RANGE_SEMITONES
 }
 
 fn midi_frequency(note: u8) -> f32 {
@@ -669,7 +714,8 @@ fn midi_voice_id(channel: u8, note: u8, layer_index: usize) -> VoiceId {
 #[cfg(test)]
 mod tests {
     use super::{
-        MidiError, MidiMessage, MidiPitch, MidiSynth, ParsedMessage, midi_frequency, parse,
+        MidiError, MidiMessage, MidiPitch, MidiSynth, PITCH_BEND_RANGE_SEMITONES, ParsedMessage,
+        midi_frequency, parse, pitch_bend_semitones,
     };
     use crate::{Instrument, Preset};
 
@@ -695,6 +741,20 @@ mod tests {
             assert_eq!(
                 parse(message(&[0x90 | channel, 42, 0])),
                 Ok(ParsedMessage::NoteOff { channel, note: 42 })
+            );
+            assert_eq!(
+                parse(message(&[0xe0 | channel, 0, 64])),
+                Ok(ParsedMessage::PitchBend {
+                    channel,
+                    value: 8_192
+                })
+            );
+            assert_eq!(
+                parse(message(&[0xb0 | channel, 1, 127])),
+                Ok(ParsedMessage::ModWheel {
+                    channel,
+                    value: 127
+                })
             );
             assert_eq!(
                 parse(message(&[0xb0 | channel, 123, 0])),
@@ -726,19 +786,22 @@ mod tests {
             Err(MidiError::MalformedMessage)
         );
         assert_eq!(
-            parse(message(&[0xe0, 0, 0])),
+            parse(message(&[0xd0, 0, 0])),
             Err(MidiError::UnsupportedMessage)
         );
         assert_eq!(
-            parse(message(&[0xb0, 1, 0])),
+            parse(message(&[0xb0, 2, 0])),
             Err(MidiError::UnsupportedMessage)
         );
     }
 
     #[test]
-    fn equal_tempered_pitch_has_expected_reference() {
+    fn equal_tempered_pitch_and_bend_have_expected_references() {
         assert!((midi_frequency(69) - 440.0).abs() < f32::EPSILON);
         assert!((midi_frequency(81) - 880.0).abs() < 0.001);
+        assert!((pitch_bend_semitones(0) + PITCH_BEND_RANGE_SEMITONES).abs() < f32::EPSILON);
+        assert!(pitch_bend_semitones(8_192).abs() < f32::EPSILON);
+        assert!((pitch_bend_semitones(16_383) - PITCH_BEND_RANGE_SEMITONES).abs() < f32::EPSILON);
     }
 
     #[test]

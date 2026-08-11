@@ -15,6 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("sine", Instrument::Sine, 440.0),
         ("square", Instrument::Square, 330.0),
         ("triangle", Instrument::Triangle, 261.63),
+        ("pluck", Instrument::Pluck, 329.63),
         ("bass", Instrument::Bass, 110.0),
         ("pad", Instrument::Pad, 220.0),
         ("lead", Instrument::Lead, 440.0),

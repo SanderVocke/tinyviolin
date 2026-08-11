@@ -9,15 +9,16 @@ use crate::state::{Reader, push_f32, push_u16, push_u32};
 use crate::{EffectSettings, Event, Preset, ProcessError, StateError, Synth, TimedEvent};
 
 const AUDIO_STATE_MAGIC: &[u8; 4] = b"TVAS";
-const AUDIO_STATE_VERSION: u16 = 1;
+const AUDIO_STATE_VERSION: u16 = 2;
 
 /// A polyphonic synthesizer, per-channel input mixer, and post-effects chain.
 ///
 /// The channel count is selected during construction and may be any nonzero
 /// value. Processing is in-place: each channel initially contains its audio
 /// input. The same synthesized sample is added to every channel, then each
-/// channel is independently passed through distortion and reverb. Construction
-/// allocates effect delay storage; dispatch and processing do not allocate.
+/// channel is independently passed through distortion, three-band EQ,
+/// compression, and reverb. Construction allocates effect delay storage;
+/// dispatch and processing do not allocate.
 pub struct AudioProcessor<const VOICES: usize = 32, const MIDI_LAYERS: usize = 2> {
     midi: MidiSynth<VOICES, MIDI_LAYERS>,
     channel_effects: Vec<ChannelEffects>,
@@ -100,19 +101,24 @@ impl<const VOICES: usize, const MIDI_LAYERS: usize> AudioProcessor<VOICES, MIDI_
 
     /// Replace all post-effect settings.
     ///
-    /// Disabling or re-enabling reverb clears its previous tail. No settings
-    /// change occurs when validation fails.
+    /// Toggling a stateful effect clears that effect's previous DSP state. No
+    /// settings change occurs when validation fails.
     ///
     /// # Errors
     ///
-    /// Returns [`ProcessError::InvalidReverbAmount`] or
-    /// [`ProcessError::InvalidDistortionDrive`] for an out-of-range or
+    /// Returns a control-specific [`ProcessError`] for an out-of-range or
     /// non-finite control value.
     pub fn set_effect_settings(&mut self, settings: EffectSettings) -> Result<(), ProcessError> {
         validate_effect_settings(settings)?;
-        if settings.reverb_enabled != self.settings.reverb_enabled {
-            for effects in &mut self.channel_effects {
-                effects.reset_dsp();
+        for effects in &mut self.channel_effects {
+            if settings.reverb_enabled != self.settings.reverb_enabled {
+                effects.reset_reverb();
+            }
+            if settings.compressor_enabled != self.settings.compressor_enabled {
+                effects.reset_compressor();
+            }
+            if settings.eq_enabled != self.settings.eq_enabled {
+                effects.reset_equalizer();
             }
         }
         self.settings = settings;
@@ -123,7 +129,7 @@ impl<const VOICES: usize, const MIDI_LAYERS: usize> AudioProcessor<VOICES, MIDI_
     pub fn set_reverb_enabled(&mut self, enabled: bool) {
         if enabled != self.settings.reverb_enabled {
             for effects in &mut self.channel_effects {
-                effects.reset_dsp();
+                effects.reset_reverb();
             }
             self.settings.reverb_enabled = enabled;
         }
@@ -159,6 +165,97 @@ impl<const VOICES: usize, const MIDI_LAYERS: usize> AudioProcessor<VOICES, MIDI_
             return Err(ProcessError::InvalidDistortionDrive);
         }
         self.settings.distortion_drive = drive;
+        Ok(())
+    }
+
+    /// Enable or bypass the one-knob compressor.
+    pub fn set_compressor_enabled(&mut self, enabled: bool) {
+        if enabled != self.settings.compressor_enabled {
+            for effects in &mut self.channel_effects {
+                effects.reset_compressor();
+            }
+            self.settings.compressor_enabled = enabled;
+        }
+    }
+
+    /// Set compression strength in `0.0..=1.0`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessError::InvalidCompressorAmount`] for an out-of-range or
+    /// non-finite value.
+    pub fn set_compressor_amount(&mut self, amount: f32) -> Result<(), ProcessError> {
+        if !amount.is_finite() || !(0.0..=1.0).contains(&amount) {
+            return Err(ProcessError::InvalidCompressorAmount);
+        }
+        self.settings.compressor_amount = amount;
+        Ok(())
+    }
+
+    /// Enable or bypass the three-band equalizer.
+    pub fn set_eq_enabled(&mut self, enabled: bool) {
+        if enabled != self.settings.eq_enabled {
+            for effects in &mut self.channel_effects {
+                effects.reset_equalizer();
+            }
+            self.settings.eq_enabled = enabled;
+        }
+    }
+
+    /// Set all three equalizer band gains in decibels.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessError::InvalidEqGain`] if any value is non-finite or
+    /// outside `-12.0..=12.0`.
+    pub fn set_eq_gains(
+        &mut self,
+        low_db: f32,
+        mid_db: f32,
+        high_db: f32,
+    ) -> Result<(), ProcessError> {
+        validate_eq_gain(low_db)?;
+        validate_eq_gain(mid_db)?;
+        validate_eq_gain(high_db)?;
+        self.settings.eq_low_db = low_db;
+        self.settings.eq_mid_db = mid_db;
+        self.settings.eq_high_db = high_db;
+        Ok(())
+    }
+
+    /// Set the equalizer low-band gain in decibels.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessError::InvalidEqGain`] for an out-of-range or non-finite
+    /// value.
+    pub fn set_eq_low_db(&mut self, gain_db: f32) -> Result<(), ProcessError> {
+        validate_eq_gain(gain_db)?;
+        self.settings.eq_low_db = gain_db;
+        Ok(())
+    }
+
+    /// Set the equalizer mid-band gain in decibels.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessError::InvalidEqGain`] for an out-of-range or non-finite
+    /// value.
+    pub fn set_eq_mid_db(&mut self, gain_db: f32) -> Result<(), ProcessError> {
+        validate_eq_gain(gain_db)?;
+        self.settings.eq_mid_db = gain_db;
+        Ok(())
+    }
+
+    /// Set the equalizer high-band gain in decibels.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessError::InvalidEqGain`] for an out-of-range or non-finite
+    /// value.
+    pub fn set_eq_high_db(&mut self, gain_db: f32) -> Result<(), ProcessError> {
+        validate_eq_gain(gain_db)?;
+        self.settings.eq_high_db = gain_db;
         Ok(())
     }
 
@@ -259,7 +356,7 @@ impl<const VOICES: usize, const MIDI_LAYERS: usize> AudioProcessor<VOICES, MIDI_
         self.midi.select_preset_by_id(id)
     }
 
-    /// Immediately clear voices, oscillators, and effect tails.
+    /// Immediately clear voices, oscillators, controller state, and effect tails.
     ///
     /// MIDI mappings and effect settings are preserved. This host panic/reset
     /// operation performs no allocation or locking.
@@ -295,6 +392,12 @@ impl<const VOICES: usize, const MIDI_LAYERS: usize> AudioProcessor<VOICES, MIDI_
         push_f32(&mut output, self.settings.reverb_amount);
         output.push(u8::from(self.settings.distortion_enabled));
         push_f32(&mut output, self.settings.distortion_drive);
+        output.push(u8::from(self.settings.compressor_enabled));
+        push_f32(&mut output, self.settings.compressor_amount);
+        output.push(u8::from(self.settings.eq_enabled));
+        push_f32(&mut output, self.settings.eq_low_db);
+        push_f32(&mut output, self.settings.eq_mid_db);
+        push_f32(&mut output, self.settings.eq_high_db);
         output
     }
 
@@ -313,24 +416,34 @@ impl<const VOICES: usize, const MIDI_LAYERS: usize> AudioProcessor<VOICES, MIDI_
         if reader.read_exact(AUDIO_STATE_MAGIC.len())? != AUDIO_STATE_MAGIC {
             return Err(StateError::InvalidData);
         }
-        if reader.u16()? != AUDIO_STATE_VERSION {
+        let version = reader.u16()?;
+        if !matches!(version, 1 | AUDIO_STATE_VERSION) {
             return Err(StateError::UnsupportedVersion);
         }
         let midi_len = usize::try_from(reader.u32()?).map_err(|_| StateError::InvalidData)?;
         let midi_state = reader.read_exact(midi_len)?;
-        let settings = EffectSettings {
+        let mut settings = EffectSettings {
             reverb_enabled: read_bool(&mut reader)?,
             reverb_amount: reader.f32()?,
             distortion_enabled: read_bool(&mut reader)?,
             distortion_drive: reader.f32()?,
+            ..EffectSettings::default()
         };
+        if version >= 2 {
+            settings.compressor_enabled = read_bool(&mut reader)?;
+            settings.compressor_amount = reader.f32()?;
+            settings.eq_enabled = read_bool(&mut reader)?;
+            settings.eq_low_db = reader.f32()?;
+            settings.eq_mid_db = reader.f32()?;
+            settings.eq_high_db = reader.f32()?;
+        }
         if !reader.is_finished() {
             return Err(StateError::InvalidData);
         }
         validate_effect_settings(settings).map_err(|_| StateError::InvalidConfiguration)?;
         self.midi.load_state(midi_state)?;
-        // Validation above makes this infallible and preserves the usual
-        // reverb-toggle behavior.
+        // Validation above makes this infallible and preserves effect-toggle
+        // reset behavior.
         self.set_effect_settings(settings)
             .map_err(|_| StateError::InvalidConfiguration)
     }
@@ -455,6 +568,20 @@ fn validate_effect_settings(settings: EffectSettings) -> Result<(), ProcessError
     {
         return Err(ProcessError::InvalidDistortionDrive);
     }
+    if !settings.compressor_amount.is_finite() || !(0.0..=1.0).contains(&settings.compressor_amount)
+    {
+        return Err(ProcessError::InvalidCompressorAmount);
+    }
+    validate_eq_gain(settings.eq_low_db)?;
+    validate_eq_gain(settings.eq_mid_db)?;
+    validate_eq_gain(settings.eq_high_db)?;
+    Ok(())
+}
+
+fn validate_eq_gain(gain_db: f32) -> Result<(), ProcessError> {
+    if !gain_db.is_finite() || !(-12.0..=12.0).contains(&gain_db) {
+        return Err(ProcessError::InvalidEqGain);
+    }
     Ok(())
 }
 
@@ -553,6 +680,12 @@ mod tests {
                 reverb_amount: 0.5,
                 distortion_enabled: true,
                 distortion_drive: 4.0,
+                compressor_enabled: true,
+                compressor_amount: 0.6,
+                eq_enabled: true,
+                eq_low_db: 2.0,
+                eq_mid_db: -1.0,
+                eq_high_db: 3.0,
             })
             .unwrap();
         let events = [
@@ -578,7 +711,7 @@ mod tests {
     #[test]
     fn invalid_midi_is_rejected_before_audio_or_voice_state_changes() {
         let mut processor = AudioProcessor::<1>::new(48_000.0, 1).unwrap();
-        let unsupported = MidiMessage::new(&[0xe0, 0, 0]).unwrap();
+        let unsupported = MidiMessage::new(&[0xd0, 0, 0]).unwrap();
         let mut output = [0.25; 4];
         assert_eq!(
             processor.process_midi(&mut [&mut output], &[TimedMidiMessage::new(0, unsupported)],),
@@ -607,6 +740,15 @@ mod tests {
         assert_eq!(
             processor.set_effect_settings(invalid),
             Err(ProcessError::InvalidReverbAmount)
+        );
+        assert_eq!(processor.effect_settings(), old);
+        assert_eq!(
+            processor.set_compressor_amount(1.1),
+            Err(ProcessError::InvalidCompressorAmount)
+        );
+        assert_eq!(
+            processor.set_eq_gains(0.0, f32::NAN, 0.0),
+            Err(ProcessError::InvalidEqGain)
         );
         assert_eq!(processor.effect_settings(), old);
 
@@ -643,6 +785,12 @@ mod tests {
                 reverb_amount: 0.375,
                 distortion_enabled: true,
                 distortion_drive: 7.5,
+                compressor_enabled: true,
+                compressor_amount: 0.625,
+                eq_enabled: true,
+                eq_low_db: 4.0,
+                eq_mid_db: -2.5,
+                eq_high_db: 1.25,
             })
             .unwrap();
         let state = source.serialize_state();
@@ -655,6 +803,21 @@ mod tests {
         // Stream configuration is fixed by construction and not session state.
         assert_eq!(restored.sample_rate(), 44_100.0);
         assert_eq!(restored.channel_count(), 1);
+
+        // Version 1 states ended after the distortion drive. Loading one keeps
+        // the old controls and supplies bypassed defaults for newer effects.
+        let mut version_one = state.clone();
+        version_one[4..6].copy_from_slice(&1_u16.to_le_bytes());
+        version_one.truncate(version_one.len() - 18);
+        let mut legacy = AudioProcessor::<4, 1>::new(48_000.0, 1).unwrap();
+        legacy.load_state(&version_one).unwrap();
+        let legacy_settings = legacy.effect_settings();
+        assert!(legacy_settings.reverb_enabled);
+        assert_eq!(legacy_settings.reverb_amount, 0.375);
+        assert!(legacy_settings.distortion_enabled);
+        assert_eq!(legacy_settings.distortion_drive, 7.5);
+        assert!(!legacy_settings.compressor_enabled);
+        assert!(!legacy_settings.eq_enabled);
     }
 
     #[test]

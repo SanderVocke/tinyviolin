@@ -20,6 +20,21 @@ pub enum Event {
     },
     /// Put all voices with this identity into their release phase.
     NoteOff(VoiceId),
+    /// Set the pitch offset for every active voice with this identity.
+    PitchBend {
+        /// Identity of the voice to retune without restarting it.
+        id: VoiceId,
+        /// Pitch offset in semitones, in `-128.0..=128.0`.
+        semitones: f32,
+    },
+    /// Set 5.5 Hz vibrato depth, up to ±0.5 semitone, for every active voice
+    /// with this identity.
+    Modulation {
+        /// Identity of the voice to modulate without restarting it.
+        id: VoiceId,
+        /// Normalized modulation-wheel amount, in `0.0..=1.0`.
+        amount: f32,
+    },
     /// Put every active voice into its release phase.
     AllNotesOff,
 }
@@ -65,10 +80,18 @@ pub enum ProcessError {
     InvalidReverbAmount,
     /// Distortion drive was non-finite or outside `1.0..=20.0`.
     InvalidDistortionDrive,
+    /// Compressor amount was non-finite or outside `0.0..=1.0`.
+    InvalidCompressorAmount,
+    /// An equalizer band gain was non-finite or outside `-12.0..=12.0` dB.
+    InvalidEqGain,
     /// A note frequency was not positive and finite.
     InvalidFrequency,
     /// A gain was non-finite or outside `0.0..=1.0`.
     InvalidGain,
+    /// A pitch bend was non-finite or outside `-128.0..=128.0` semitones.
+    InvalidPitchBend,
+    /// A modulation amount was non-finite or outside `0.0..=1.0`.
+    InvalidModulation,
     /// Timed events were not in nondecreasing sample-offset order.
     EventsNotOrdered,
     /// An event offset was greater than the output block length.
@@ -87,8 +110,12 @@ impl core::fmt::Display for ProcessError {
             Self::InvalidFrameRange => "frame range is outside the audio block",
             Self::InvalidReverbAmount => "reverb amount must be finite and in 0..=1",
             Self::InvalidDistortionDrive => "distortion drive must be finite and in 1..=20",
+            Self::InvalidCompressorAmount => "compressor amount must be finite and in 0..=1",
+            Self::InvalidEqGain => "equalizer gains must be finite and in -12..=12 dB",
             Self::InvalidFrequency => "frequency must be positive and finite",
             Self::InvalidGain => "gain must be finite and in 0..=1",
+            Self::InvalidPitchBend => "pitch bend must be finite and in -128..=128 semitones",
+            Self::InvalidModulation => "modulation amount must be finite and in 0..=1",
             Self::EventsNotOrdered => "events must be ordered by sample offset",
             Self::EventOutsideBlock => "event sample offset is outside the block",
         })
