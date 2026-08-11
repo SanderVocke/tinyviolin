@@ -131,6 +131,75 @@ fn mapping_validation_and_pool_overflow_are_deterministic() {
 }
 
 #[test]
+fn pitch_bend_and_mod_wheel_affect_active_and_future_notes_per_channel() {
+    let configured = || {
+        let mut midi = MidiSynth::<4, 1>::new(48_000.0).unwrap();
+        midi.set_channel_layer(0, 0, layer(Instrument::Sine, MidiPitch::Note, 0.5))
+            .unwrap();
+        midi
+    };
+
+    let mut before_note = configured();
+    before_note.dispatch(message(&[0xe0, 127, 127])).unwrap();
+    before_note.dispatch(message(&[0xb0, 1, 127])).unwrap();
+    before_note.dispatch(message(&[0x90, 69, 127])).unwrap();
+
+    let mut after_note = configured();
+    after_note.dispatch(message(&[0x90, 69, 127])).unwrap();
+    after_note.dispatch(message(&[0xe0, 127, 127])).unwrap();
+    after_note.dispatch(message(&[0xb0, 1, 127])).unwrap();
+
+    let mut before_output = [0.0; 512];
+    let mut after_output = [0.0; 512];
+    before_note.process(&mut before_output, &[]).unwrap();
+    after_note.process(&mut after_output, &[]).unwrap();
+    assert_eq!(before_output, after_output);
+
+    let mut other_channel_control = configured();
+    let mut centered = configured();
+    other_channel_control
+        .dispatch(message(&[0xe1, 127, 127]))
+        .unwrap();
+    other_channel_control
+        .dispatch(message(&[0xb1, 1, 127]))
+        .unwrap();
+    other_channel_control
+        .dispatch(message(&[0x90, 69, 127]))
+        .unwrap();
+    centered.dispatch(message(&[0x90, 69, 127])).unwrap();
+    let mut other_channel_output = [0.0; 512];
+    let mut centered_output = [0.0; 512];
+    other_channel_control
+        .process(&mut other_channel_output, &[])
+        .unwrap();
+    centered.process(&mut centered_output, &[]).unwrap();
+    assert_eq!(other_channel_output, centered_output);
+    assert_ne!(before_output, centered_output);
+}
+
+#[test]
+fn timed_pitch_bend_is_sample_accurate() {
+    let mut bent = MidiSynth::<2, 1>::new(48_000.0).unwrap();
+    let mut centered = MidiSynth::<2, 1>::new(48_000.0).unwrap();
+    for synth in [&mut bent, &mut centered] {
+        synth
+            .set_channel_layer(0, 0, layer(Instrument::Triangle, MidiPitch::Note, 0.5))
+            .unwrap();
+        synth.dispatch(message(&[0x90, 60, 127])).unwrap();
+    }
+    let mut bent_output = [0.0; 128];
+    let mut centered_output = [0.0; 128];
+    bent.process(
+        &mut bent_output,
+        &[TimedMidiMessage::new(64, message(&[0xe0, 0, 0]))],
+    )
+    .unwrap();
+    centered.process(&mut centered_output, &[]).unwrap();
+    assert_eq!(bent_output[..64], centered_output[..64]);
+    assert_ne!(bent_output[64..], centered_output[64..]);
+}
+
+#[test]
 fn malformed_and_unsupported_messages_do_not_change_state() {
     let mut midi = MidiSynth::<2, 1>::new(48_000.0).unwrap();
     assert_eq!(
@@ -138,7 +207,11 @@ fn malformed_and_unsupported_messages_do_not_change_state() {
         Err(MidiError::MalformedMessage)
     );
     assert_eq!(
-        midi.dispatch(message(&[0xe0, 0, 0])),
+        midi.dispatch(message(&[0xd0, 0, 0])),
+        Err(MidiError::UnsupportedMessage)
+    );
+    assert_eq!(
+        midi.dispatch(message(&[0xb0, 2, 0])),
         Err(MidiError::UnsupportedMessage)
     );
     assert_eq!(midi.engine().active_voice_count(), 0);
@@ -174,6 +247,8 @@ fn dsp_reset_is_immediate_and_preserves_configuration() {
     let mut midi = MidiSynth::<4, 1>::new(48_000.0).unwrap();
     midi.select_preset(Preset::Pad);
     midi.dispatch(message(&[0x90, 60, 127])).unwrap();
+    midi.dispatch(message(&[0xe0, 127, 127])).unwrap();
+    midi.dispatch(message(&[0xb0, 1, 127])).unwrap();
     assert_eq!(midi.engine().active_voice_count(), 1);
 
     midi.reset_dsp();
@@ -182,6 +257,14 @@ fn dsp_reset_is_immediate_and_preserves_configuration() {
 
     midi.dispatch(message(&[0x90, 60, 127])).unwrap();
     assert_eq!(midi.engine().active_voice_count(), 1);
+    let mut reset_output = [0.0; 256];
+    midi.process(&mut reset_output, &[]).unwrap();
+    let mut fresh = MidiSynth::<4, 1>::new(48_000.0).unwrap();
+    fresh.select_preset(Preset::Pad);
+    fresh.dispatch(message(&[0x90, 60, 127])).unwrap();
+    let mut fresh_output = [0.0; 256];
+    fresh.process(&mut fresh_output, &[]).unwrap();
+    assert_eq!(reset_output, fresh_output);
     midi.panic();
     assert_eq!(midi.engine().active_voice_count(), 0);
 }

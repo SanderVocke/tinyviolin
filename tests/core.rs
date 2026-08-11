@@ -91,6 +91,81 @@ fn event_beyond_block_is_rejected_before_mutation() {
 }
 
 #[test]
+fn pitch_bend_and_modulation_update_active_voices_without_retriggering() {
+    let mut reference = Synth::<1>::new(48_000.0).unwrap();
+    let mut controlled = Synth::<1>::new(48_000.0).unwrap();
+    reference
+        .dispatch(note_on(1, Instrument::Sine, 440.0))
+        .unwrap();
+    controlled
+        .dispatch(note_on(1, Instrument::Sine, 440.0))
+        .unwrap();
+    controlled
+        .dispatch(Event::PitchBend {
+            id: VoiceId(1),
+            semitones: 12.0,
+        })
+        .unwrap();
+    controlled
+        .dispatch(Event::Modulation {
+            id: VoiceId(1),
+            amount: 1.0,
+        })
+        .unwrap();
+
+    assert_eq!(controlled.active_voice_count(), 1);
+    let mut reference_output = [0.0; 512];
+    let mut controlled_output = [0.0; 512];
+    reference.process(&mut reference_output, &[]).unwrap();
+    controlled.process(&mut controlled_output, &[]).unwrap();
+    assert_ne!(controlled_output, reference_output);
+    assert!(controlled_output.iter().all(|sample| sample.is_finite()));
+}
+
+#[test]
+fn controller_events_are_sample_accurate_and_prevalidated() {
+    let mut reference = Synth::<1>::new(48_000.0).unwrap();
+    let mut controlled = Synth::<1>::new(48_000.0).unwrap();
+    reference
+        .dispatch(note_on(2, Instrument::Triangle, 330.0))
+        .unwrap();
+    controlled
+        .dispatch(note_on(2, Instrument::Triangle, 330.0))
+        .unwrap();
+    let mut reference_output = [0.0; 128];
+    let mut controlled_output = [0.0; 128];
+    reference.process(&mut reference_output, &[]).unwrap();
+    controlled
+        .process(
+            &mut controlled_output,
+            &[TimedEvent::new(
+                64,
+                Event::PitchBend {
+                    id: VoiceId(2),
+                    semitones: -7.0,
+                },
+            )],
+        )
+        .unwrap();
+    assert_eq!(controlled_output[..64], reference_output[..64]);
+    assert_ne!(controlled_output[64..], reference_output[64..]);
+
+    let invalid = [TimedEvent::new(
+        0,
+        Event::Modulation {
+            id: VoiceId(2),
+            amount: f32::NAN,
+        },
+    )];
+    let mut untouched = [0.25; 8];
+    assert_eq!(
+        controlled.process(&mut untouched, &invalid),
+        Err(ProcessError::InvalidModulation)
+    );
+    assert_eq!(untouched, [0.25; 8]);
+}
+
+#[test]
 fn repeated_identity_retriggers_without_growing_polyphony() {
     let mut synth = Synth::<2>::new(48_000.0).unwrap();
     synth.dispatch(note_on(8, Instrument::Lead, 220.0)).unwrap();

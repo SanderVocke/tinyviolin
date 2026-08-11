@@ -138,6 +138,20 @@ impl<const VOICES: usize> Synth<VOICES> {
                 );
             }
             Event::NoteOff(id) => self.release_id(id),
+            Event::PitchBend { id, semitones } => {
+                for voice in &mut self.voices {
+                    if voice.active && voice.id == id {
+                        voice.set_pitch_bend(semitones);
+                    }
+                }
+            }
+            Event::Modulation { id, amount } => {
+                for voice in &mut self.voices {
+                    if voice.active && voice.id == id {
+                        voice.set_modulation(amount);
+                    }
+                }
+            }
             Event::AllNotesOff => {
                 for voice in &mut self.voices {
                     voice.release();
@@ -162,6 +176,38 @@ impl<const VOICES: usize> Synth<VOICES> {
         }
     }
 
+    pub(crate) fn assign_control_group(
+        &mut self,
+        id: VoiceId,
+        group: u8,
+        pitch_bend_semitones: f32,
+        modulation: f32,
+    ) {
+        for voice in &mut self.voices {
+            if voice.active && voice.id == id {
+                voice.set_control_group(group);
+                voice.set_pitch_bend(pitch_bend_semitones);
+                voice.set_modulation(modulation);
+            }
+        }
+    }
+
+    pub(crate) fn set_group_pitch_bend(&mut self, group: u8, semitones: f32) {
+        for voice in &mut self.voices {
+            if voice.active && voice.control_group() == Some(group) {
+                voice.set_pitch_bend(semitones);
+            }
+        }
+    }
+
+    pub(crate) fn set_group_modulation(&mut self, group: u8, amount: f32) {
+        for voice in &mut self.voices {
+            if voice.active && voice.control_group() == Some(group) {
+                voice.set_modulation(amount);
+            }
+        }
+    }
+
     fn voice_for_start(&self) -> usize {
         if let Some(index) = self.voices.iter().position(|voice| !voice.active) {
             return index;
@@ -182,16 +228,28 @@ impl<const VOICES: usize> Synth<VOICES> {
 }
 
 pub(crate) fn validate_event(event: Event) -> Result<(), ProcessError> {
-    if let Event::NoteOn {
-        frequency_hz, gain, ..
-    } = event
-    {
-        if !frequency_hz.is_finite() || frequency_hz <= 0.0 {
-            return Err(ProcessError::InvalidFrequency);
+    match event {
+        Event::NoteOn {
+            frequency_hz, gain, ..
+        } => {
+            if !frequency_hz.is_finite() || frequency_hz <= 0.0 {
+                return Err(ProcessError::InvalidFrequency);
+            }
+            if !gain.is_finite() || !(0.0..=1.0).contains(&gain) {
+                return Err(ProcessError::InvalidGain);
+            }
         }
-        if !gain.is_finite() || !(0.0..=1.0).contains(&gain) {
-            return Err(ProcessError::InvalidGain);
+        Event::PitchBend { semitones, .. } => {
+            if !semitones.is_finite() || !(-128.0..=128.0).contains(&semitones) {
+                return Err(ProcessError::InvalidPitchBend);
+            }
         }
+        Event::Modulation { amount, .. } => {
+            if !amount.is_finite() || !(0.0..=1.0).contains(&amount) {
+                return Err(ProcessError::InvalidModulation);
+            }
+        }
+        Event::NoteOff(_) | Event::AllNotesOff => {}
     }
     Ok(())
 }

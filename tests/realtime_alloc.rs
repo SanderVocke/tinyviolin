@@ -41,6 +41,20 @@ fn prepared_core_and_midi_processing_do_not_allocate() {
                 gain: 0.4,
             },
         ),
+        TimedEvent::new(
+            32,
+            Event::PitchBend {
+                id: VoiceId(1),
+                semitones: 2.0,
+            },
+        ),
+        TimedEvent::new(
+            64,
+            Event::Modulation {
+                id: VoiceId(1),
+                amount: 1.0,
+            },
+        ),
         TimedEvent::new(96, Event::NoteOff(VoiceId(1))),
     ];
     let mut core_output = [0.0; 256];
@@ -59,6 +73,8 @@ fn prepared_core_and_midi_processing_do_not_allocate() {
     .unwrap();
     let midi_events = [
         TimedMidiMessage::new(0, MidiMessage::new(&[0x90, 60, 100]).unwrap()),
+        TimedMidiMessage::new(32, MidiMessage::new(&[0xe0, 127, 127]).unwrap()),
+        TimedMidiMessage::new(64, MidiMessage::new(&[0xb0, 1, 127]).unwrap()),
         TimedMidiMessage::new(96, MidiMessage::new(&[0x80, 60, 0]).unwrap()),
     ];
     let mut midi_output = [0.0; 256];

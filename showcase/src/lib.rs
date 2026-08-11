@@ -184,7 +184,7 @@ impl Plugin for TinyViolinShowcase {
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
     const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &AUDIO_IO_LAYOUTS;
-    const MIDI_INPUT: MidiConfig = MidiConfig::Basic;
+    const MIDI_INPUT: MidiConfig = MidiConfig::MidiCCs;
     const SAMPLE_ACCURATE_AUTOMATION: bool = true;
 
     type SysExMessage = ();
@@ -302,6 +302,31 @@ impl Plugin for TinyViolinShowcase {
                     }
                     cursor = timing;
                     self.processor.host_note_off(channel, note)
+                }
+                NoteEvent::MidiPitchBend {
+                    timing,
+                    channel,
+                    value,
+                } => {
+                    let timing = (timing as usize).min(block_len).max(cursor);
+                    if let Err(error) = self.processor.render_channels(channels, cursor..timing) {
+                        return process_error(error);
+                    }
+                    cursor = timing;
+                    self.processor.host_pitch_bend(channel, value)
+                }
+                NoteEvent::MidiCC {
+                    timing,
+                    channel,
+                    cc: 1,
+                    value,
+                } => {
+                    let timing = (timing as usize).min(block_len).max(cursor);
+                    if let Err(error) = self.processor.render_channels(channels, cursor..timing) {
+                        return process_error(error);
+                    }
+                    cursor = timing;
+                    self.processor.host_mod_wheel(channel, value)
                 }
                 _ => continue,
             };

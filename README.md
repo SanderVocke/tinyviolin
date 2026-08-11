@@ -145,13 +145,13 @@ synth.process(&mut mono_buffer, &messages)?;
 # Ok::<(), tinyviolin::midi::MidiError>(())
 ```
 
-Messages are copied into a length-tagged `[u8; 4]` backing store. The supported self-contained MIDI 1.0 messages are note-on, note-off, velocity-zero note-on, All Sound Off (CC 120), and All Notes Off (CC 123). Running status, `SysEx`, MIDI 2.0 UMP, pitch bend, sustain, and general MIDI CC automation are not interpreted. Malformed and unsupported messages return an error. MIDI note-off identity is independent of the current mapping, so remapping cannot strand an active note.
+Messages are copied into a length-tagged `[u8; 4]` backing store. The supported self-contained MIDI 1.0 messages are note-on, note-off, velocity-zero note-on, pitch bend, modulation wheel (CC1), All Sound Off (CC 120), and All Notes Off (CC 123). Pitch bend is channel-wide with a fixed range of ±2 semitones. The modulation wheel adds channel-wide 5.5 Hz vibrato with up to ±0.5 semitone depth. Both controls affect active voices without restarting their oscillator or envelope and are inherited by new notes; `reset_dsp` returns them to center/off. Running status, `SysEx`, MIDI 2.0 UMP, sustain, and other general MIDI CC automation are not interpreted. Malformed and unsupported messages return an error. MIDI note-off identity is independent of the current mapping, so remapping cannot strand an active note.
 
 The `percussion-kit` preset puts bass drums on General MIDI keys 35/36, snares on 38/40, toms on 41/43/45/47/48/50, and hi-hats on 42/44/46. Every other key carries the preceding supported assignment forward (with bass drum below key 35), so all 128 keys produce sound in one `MidiSynth`.
 
 ## Panic and session state
 
-`Synth`, `MidiSynth`, and `AudioProcessor` provide `reset_dsp()` and its host-oriented `panic()` alias. A reset immediately clears voices and oscillator state. `AudioProcessor` additionally clears every effect tail. Sample rate, channel layout, MIDI mappings, selected preset, and effect settings are preserved.
+`Synth`, `MidiSynth`, and `AudioProcessor` provide `reset_dsp()` and its host-oriented `panic()` alias. A reset immediately clears voices and oscillator state. MIDI-capable processors also center pitch bend and turn modulation off, while `AudioProcessor` additionally clears every effect tail. Sample rate, channel layout, MIDI mappings, selected preset, and effect settings are preserved.
 
 `MidiSynth::serialize_state` saves its mappings and selected preset. `AudioProcessor::serialize_state` additionally saves effect settings. The corresponding `load_state` methods validate the complete versioned binary payload before replacing configuration; malformed or capacity-incompatible state returns `StateError` and leaves configuration unchanged. DSP state, sample rate, and channel count are deliberately not serialized. Loading state does not panic the current DSP state, so a host can call `reset_dsp()` separately when desired.
 
@@ -220,7 +220,7 @@ sudo apt-get install pkg-config libasound2-dev libgl-dev libjack-jackd2-dev \
   libxcursor-dev libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev
 ```
 
-The showcase intentionally supports basic note-on, note-off, and choke events, not pitch bend, MPE, aftertouch, or general MIDI CC automation. Host notes are identified by channel and note, so overlapping instances of the same key retrigger one logical voice. Bass drum, tom, snare, and hi-hat use fixed pitches of 60, 130, 180, and 6000 Hz respectively; melodic presets use equal-tempered MIDI pitch. Preset changes apply to new notes, while effects and master gain affect the complete input+synth mix. On Windows, Cargo currently emits a harmless PDB filename-collision warning when building the same package's library and standalone binary together; the resulting executable and plugin bundles are distinct and usable.
+The showcase supports note-on, note-off, choke, channel pitch bend with a fixed ±2-semitone range, and modulation wheel (CC1) as 5.5 Hz vibrato up to ±0.5 semitone. It does not support MPE, aftertouch, sustain, or other general MIDI CC automation. Host notes are identified by channel and note, so overlapping instances of the same key retrigger one logical voice. Bass drum, tom, snare, and hi-hat use fixed pitches of 60, 130, 180, and 6000 Hz respectively; melodic presets use equal-tempered MIDI pitch. Preset changes apply to new notes, while effects and master gain affect the complete input+synth mix. On Windows, Cargo currently emits a harmless PDB filename-collision warning when building the same package's library and standalone binary together; the resulting executable and plugin bundles are distinct and usable.
 
 ## Development
 

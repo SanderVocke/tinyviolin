@@ -1,6 +1,7 @@
 use crate::preset::Preset;
 use core::ops::Range;
 
+use tinyviolin::midi::PITCH_BEND_RANGE_SEMITONES;
 use tinyviolin::{AudioProcessor, EffectSettings, Event, ProcessError, VoiceId};
 
 pub const VOICE_CAPACITY: usize = 32;
@@ -12,6 +13,8 @@ const NOTE_GAIN: f32 = 0.7;
 #[doc(hidden)]
 pub struct ShowcaseProcessor {
     audio: AudioProcessor<VOICE_CAPACITY>,
+    pitch_bend_semitones: [f32; 16],
+    modulation: [f32; 16],
 }
 
 impl ShowcaseProcessor {
@@ -32,6 +35,8 @@ impl ShowcaseProcessor {
     pub fn with_channels(sample_rate: f32, channel_count: usize) -> Result<Self, ProcessError> {
         Ok(Self {
             audio: AudioProcessor::new(sample_rate, channel_count)?,
+            pitch_bend_semitones: [0.0; 16],
+            modulation: [0.0; 16],
         })
     }
 
@@ -83,12 +88,17 @@ impl ShowcaseProcessor {
         note: u8,
         velocity: f32,
     ) -> Result<(), ProcessError> {
-        self.audio.dispatch(note_on_event(
-            host_voice_id(channel, note),
-            preset,
-            note,
-            velocity,
-        ))
+        let id = host_voice_id(channel, note);
+        self.audio
+            .dispatch(note_on_event(id, preset, note, velocity))?;
+        self.audio.dispatch(Event::PitchBend {
+            id,
+            semitones: self.pitch_bend_semitones[usize::from(channel)],
+        })?;
+        self.audio.dispatch(Event::Modulation {
+            id,
+            amount: self.modulation[usize::from(channel)],
+        })
     }
 
     /// Start a GUI note immediately.
@@ -123,6 +133,58 @@ impl ShowcaseProcessor {
     pub fn host_note_off(&mut self, channel: u8, note: u8) -> Result<(), ProcessError> {
         self.audio
             .dispatch(Event::NoteOff(host_voice_id(channel, note)))
+    }
+
+    /// Apply a normalized MIDI pitch-wheel value to one host channel.
+    ///
+    /// The showcase uses the conventional fixed range of two semitones in each
+    /// direction. Values from the host are clamped to `0.0..=1.0`.
+    ///
+    /// # Errors
+    ///
+    /// Propagates a core validation error if a generated control event is invalid.
+    pub fn host_pitch_bend(&mut self, channel: u8, value: f32) -> Result<(), ProcessError> {
+        let Some(slot) = self.pitch_bend_semitones.get_mut(usize::from(channel)) else {
+            return Ok(());
+        };
+        let normalized = if value.is_finite() {
+            value.clamp(0.0, 1.0)
+        } else {
+            0.5
+        };
+        let semitones = (normalized * 2.0 - 1.0) * PITCH_BEND_RANGE_SEMITONES;
+        *slot = semitones;
+        for note in 0_u8..=127 {
+            self.audio.dispatch(Event::PitchBend {
+                id: host_voice_id(channel, note),
+                semitones,
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Apply MIDI modulation wheel (CC1) to one host channel as vibrato depth.
+    ///
+    /// # Errors
+    ///
+    /// Propagates a core validation error if a generated control event is invalid.
+    pub fn host_mod_wheel(&mut self, channel: u8, value: f32) -> Result<(), ProcessError> {
+        let Some(slot) = self.modulation.get_mut(usize::from(channel)) else {
+            return Ok(());
+        };
+        let amount = if value.is_finite() {
+            value.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        *slot = amount;
+        for note in 0_u8..=127 {
+            self.audio.dispatch(Event::Modulation {
+                id: host_voice_id(channel, note),
+                amount,
+            })?;
+        }
+        Ok(())
     }
 
     #[must_use]
@@ -211,6 +273,46 @@ mod tests {
         for (full_sample, half_sample) in full_output.into_iter().zip(half_output) {
             assert!((half_sample - full_sample * 0.5).abs() < f32::EPSILON);
         }
+    }
+
+    #[test]
+    fn host_pitch_bend_and_mod_wheel_are_channel_specific_and_persist_for_new_notes() {
+        let configured = || ShowcaseProcessor::new(48_000.0).unwrap();
+
+        let mut controlled_before = configured();
+        controlled_before.host_pitch_bend(2, 1.0).unwrap();
+        controlled_before.host_mod_wheel(2, 1.0).unwrap();
+        controlled_before
+            .host_note_on(Preset::Sine, 2, 69, 1.0)
+            .unwrap();
+
+        let mut controlled_after = configured();
+        controlled_after
+            .host_note_on(Preset::Sine, 2, 69, 1.0)
+            .unwrap();
+        controlled_after.host_pitch_bend(2, 1.0).unwrap();
+        controlled_after.host_mod_wheel(2, 1.0).unwrap();
+
+        let mut before_output = [0.0; 512];
+        let mut after_output = [0.0; 512];
+        controlled_before.render(&mut before_output).unwrap();
+        controlled_after.render(&mut after_output).unwrap();
+        assert_eq!(before_output, after_output);
+
+        let mut centered = configured();
+        let mut other_channel = configured();
+        centered.host_note_on(Preset::Sine, 2, 69, 1.0).unwrap();
+        other_channel
+            .host_pitch_bend(3, 1.0)
+            .and_then(|()| other_channel.host_mod_wheel(3, 1.0))
+            .and_then(|()| other_channel.host_note_on(Preset::Sine, 2, 69, 1.0))
+            .unwrap();
+        let mut centered_output = [0.0; 512];
+        let mut other_channel_output = [0.0; 512];
+        centered.render(&mut centered_output).unwrap();
+        other_channel.render(&mut other_channel_output).unwrap();
+        assert_eq!(centered_output, other_channel_output);
+        assert_ne!(before_output, centered_output);
     }
 
     #[test]

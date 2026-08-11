@@ -356,7 +356,7 @@ impl<const VOICES: usize, const MIDI_LAYERS: usize> AudioProcessor<VOICES, MIDI_
         self.midi.select_preset_by_id(id)
     }
 
-    /// Immediately clear voices, oscillators, and effect tails.
+    /// Immediately clear voices, oscillators, controller state, and effect tails.
     ///
     /// MIDI mappings and effect settings are preserved. This host panic/reset
     /// operation performs no allocation or locking.
@@ -711,7 +711,7 @@ mod tests {
     #[test]
     fn invalid_midi_is_rejected_before_audio_or_voice_state_changes() {
         let mut processor = AudioProcessor::<1>::new(48_000.0, 1).unwrap();
-        let unsupported = MidiMessage::new(&[0xe0, 0, 0]).unwrap();
+        let unsupported = MidiMessage::new(&[0xd0, 0, 0]).unwrap();
         let mut output = [0.25; 4];
         assert_eq!(
             processor.process_midi(&mut [&mut output], &[TimedMidiMessage::new(0, unsupported)],),
