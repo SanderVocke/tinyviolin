@@ -17,7 +17,7 @@ const DEFAULT_SAMPLE_RATE: f32 = 48_000.0;
 const DEFAULT_CHANNELS: usize = 2;
 const MAX_PLUGIN_CHANNELS: usize = 63;
 const EDITOR_WIDTH: f32 = 640.0;
-const EDITOR_HEIGHT: f32 = 340.0;
+const EDITOR_HEIGHT: f32 = 440.0;
 
 const fn audio_layout(channel_count: u32) -> AudioIOLayout {
     AudioIOLayout {
@@ -74,6 +74,24 @@ struct ShowcaseParams {
 
     #[id = "distortion-drive"]
     distortion_drive: FloatParam,
+
+    #[id = "compressor-enabled"]
+    compressor_enabled: BoolParam,
+
+    #[id = "compressor-amount"]
+    compressor_amount: FloatParam,
+
+    #[id = "eq-enabled"]
+    eq_enabled: BoolParam,
+
+    #[id = "eq-low"]
+    eq_low_db: FloatParam,
+
+    #[id = "eq-mid"]
+    eq_mid_db: FloatParam,
+
+    #[id = "eq-high"]
+    eq_high_db: FloatParam,
 }
 
 impl Default for ShowcaseParams {
@@ -115,8 +133,34 @@ impl Default for ShowcaseParams {
             )
             .with_unit("x")
             .with_value_to_string(formatters::v2s_f32_rounded(1)),
+            compressor_enabled: BoolParam::new("Compressor", false),
+            compressor_amount: FloatParam::new(
+                "Compression",
+                0.5,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            )
+            .with_unit(" %")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+            eq_enabled: BoolParam::new("3-Band EQ", false),
+            eq_low_db: eq_parameter("EQ Low"),
+            eq_mid_db: eq_parameter("EQ Mid"),
+            eq_high_db: eq_parameter("EQ High"),
         }
     }
+}
+
+fn eq_parameter(name: &'static str) -> FloatParam {
+    FloatParam::new(
+        name,
+        0.0,
+        FloatRange::Linear {
+            min: -12.0,
+            max: 12.0,
+        },
+    )
+    .with_unit(" dB")
+    .with_value_to_string(formatters::v2s_f32_rounded(1))
 }
 
 impl Default for TinyViolinShowcase {
@@ -206,6 +250,12 @@ impl Plugin for TinyViolinShowcase {
             reverb_amount: self.params.reverb_amount.value(),
             distortion_enabled: self.params.distortion_enabled.value(),
             distortion_drive: self.params.distortion_drive.value(),
+            compressor_enabled: self.params.compressor_enabled.value(),
+            compressor_amount: self.params.compressor_amount.value(),
+            eq_enabled: self.params.eq_enabled.value(),
+            eq_low_db: self.params.eq_low_db.value(),
+            eq_mid_db: self.params.eq_mid_db.value(),
+            eq_high_db: self.params.eq_high_db.value(),
         };
         if let Err(error) = self.processor.set_effect_settings(settings) {
             return process_error(error);
@@ -285,6 +335,8 @@ impl ClapPlugin for TinyViolinShowcase {
         ClapFeature::MultiEffects,
         ClapFeature::Reverb,
         ClapFeature::Distortion,
+        ClapFeature::Compressor,
+        ClapFeature::Equalizer,
         ClapFeature::Stereo,
         ClapFeature::Mono,
         ClapFeature::Surround,
@@ -300,6 +352,8 @@ impl Vst3Plugin for TinyViolinShowcase {
         Vst3SubCategory::Synth,
         Vst3SubCategory::Reverb,
         Vst3SubCategory::Distortion,
+        Vst3SubCategory::Dynamics,
+        Vst3SubCategory::Eq,
     ];
 }
 
@@ -334,6 +388,12 @@ mod tests {
         assert!((params.reverb_amount.value() - 0.25).abs() < f32::EPSILON);
         assert!(!params.distortion_enabled.value());
         assert!((params.distortion_drive.value() - 4.0).abs() < f32::EPSILON);
+        assert!(!params.compressor_enabled.value());
+        assert!((params.compressor_amount.value() - 0.5).abs() < f32::EPSILON);
+        assert!(!params.eq_enabled.value());
+        assert!(params.eq_low_db.value().abs() < f32::EPSILON);
+        assert!(params.eq_mid_db.value().abs() < f32::EPSILON);
+        assert!(params.eq_high_db.value().abs() < f32::EPSILON);
     }
 
     #[test]

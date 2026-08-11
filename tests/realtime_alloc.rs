@@ -68,6 +68,11 @@ fn prepared_core_and_midi_processing_do_not_allocate() {
         .set_effect_settings(EffectSettings {
             reverb_enabled: true,
             distortion_enabled: true,
+            compressor_enabled: true,
+            eq_enabled: true,
+            eq_low_db: 2.0,
+            eq_mid_db: -1.0,
+            eq_high_db: 1.5,
             ..EffectSettings::default()
         })
         .unwrap();

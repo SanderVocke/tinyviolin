@@ -14,6 +14,8 @@ pub enum Preset {
     Square,
     /// A triangle oscillator across the MIDI note range.
     Triangle,
+    /// A plucked-string instrument across the MIDI note range.
+    Pluck,
     /// A low melodic instrument across the MIDI note range.
     Bass,
     /// A slowly attacking melodic instrument across the MIDI note range.
@@ -32,10 +34,11 @@ pub enum Preset {
     PercussionKit,
 }
 
-const AVAILABLE: [Preset; 11] = [
+const AVAILABLE: [Preset; 12] = [
     Preset::Sine,
     Preset::Square,
     Preset::Triangle,
+    Preset::Pluck,
     Preset::Bass,
     Preset::Pad,
     Preset::Lead,
@@ -60,6 +63,7 @@ impl Preset {
             Self::Sine => "sine",
             Self::Square => "square",
             Self::Triangle => "triangle",
+            Self::Pluck => "pluck",
             Self::Bass => "bass",
             Self::Pad => "pad",
             Self::Lead => "lead",
@@ -78,6 +82,7 @@ impl Preset {
             Self::Sine => "Sine",
             Self::Square => "Square",
             Self::Triangle => "Triangle",
+            Self::Pluck => "Pluck",
             Self::Bass => "Bass",
             Self::Pad => "Pad",
             Self::Lead => "Lead",
@@ -105,6 +110,7 @@ impl Preset {
             Self::Sine => Instrument::Sine,
             Self::Square => Instrument::Square,
             Self::Triangle => Instrument::Triangle,
+            Self::Pluck => Instrument::Pluck,
             Self::Bass => Instrument::Bass,
             Self::Pad => Instrument::Pad,
             Self::Lead => Instrument::Lead,
@@ -119,7 +125,13 @@ impl Preset {
     pub(crate) const fn uses_midi_pitch(self) -> bool {
         matches!(
             self,
-            Self::Sine | Self::Square | Self::Triangle | Self::Bass | Self::Pad | Self::Lead
+            Self::Sine
+                | Self::Square
+                | Self::Triangle
+                | Self::Pluck
+                | Self::Bass
+                | Self::Pad
+                | Self::Lead
         )
     }
 }
@@ -144,7 +156,7 @@ mod tests {
     #[test]
     fn runtime_catalog_has_stable_unique_ids() {
         let presets = Preset::available();
-        assert_eq!(presets.len(), 11);
+        assert_eq!(presets.len(), 12);
         for (index, preset) in presets.iter().copied().enumerate() {
             assert_eq!(Preset::from_id(preset.id()), Some(preset));
             assert!(!preset.name().is_empty());

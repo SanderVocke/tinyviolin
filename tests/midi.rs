@@ -190,7 +190,7 @@ fn dsp_reset_is_immediate_and_preserves_configuration() {
 fn serialized_state_round_trips_configuration_but_not_dsp() {
     let mut source = MidiSynth::<4, 2>::new(48_000.0).unwrap();
     source
-        .set_layer(4, 72, 0, layer(Instrument::Lead, MidiPitch::Note, 0.625))
+        .set_layer(4, 72, 0, layer(Instrument::Pluck, MidiPitch::Note, 0.625))
         .unwrap();
     source
         .set_layer(

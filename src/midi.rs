@@ -638,6 +638,7 @@ const fn instrument_code(instrument: Instrument) -> u8 {
         Instrument::Tom => 7,
         Instrument::Snare => 8,
         Instrument::HiHat => 9,
+        Instrument::Pluck => 10,
     }
 }
 
@@ -653,6 +654,7 @@ const fn instrument_from_code(code: u8) -> Option<Instrument> {
         7 => Some(Instrument::Tom),
         8 => Some(Instrument::Snare),
         9 => Some(Instrument::HiHat),
+        10 => Some(Instrument::Pluck),
         _ => None,
     }
 }

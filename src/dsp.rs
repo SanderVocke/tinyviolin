@@ -100,6 +100,12 @@ impl Voice {
             Instrument::Sine | Instrument::BassDrum => sine(self.phase[0]),
             Instrument::Square => square(self.phase[0]),
             Instrument::Triangle => triangle(self.phase[0]),
+            Instrument::Pluck => {
+                let brightness = (-7.0 * self.elapsed_seconds).exp();
+                0.75 * triangle(self.phase[0])
+                    + 0.25 * brightness * triangle(self.phase[1])
+                    + 0.12 * brightness * self.next_noise()
+            }
             Instrument::Bass => 0.7 * sine(self.phase[0]) + 0.3 * triangle(self.phase[1]),
             Instrument::Pad => {
                 0.4 * sine(self.phase[0])
@@ -130,7 +136,7 @@ impl Voice {
 
     fn phase_ratios(&self) -> [f32; 3] {
         match self.instrument {
-            Instrument::Bass | Instrument::Lead => [1.0, 2.0, 1.0],
+            Instrument::Pluck | Instrument::Bass | Instrument::Lead => [1.0, 2.0, 1.0],
             Instrument::Pad => [1.0, 0.995, 1.005],
             Instrument::HiHat => [1.0, 1.371, 1.617],
             _ => [1.0; 3],
@@ -213,6 +219,7 @@ fn advance_phase(phase: f32, increment: f32) -> f32 {
 
 fn melodic_shape(instrument: Instrument) -> (f32, f32, f32) {
     match instrument {
+        Instrument::Pluck => (0.001, 0.7, 0.12),
         Instrument::Bass => (0.005, 0.12, 0.65),
         Instrument::Pad => (0.35, 0.4, 0.75),
         Instrument::Lead => (0.01, 0.08, 0.8),
@@ -236,6 +243,7 @@ fn is_one_shot(instrument: Instrument) -> bool {
 
 fn release_seconds(instrument: Instrument) -> f32 {
     match instrument {
+        Instrument::Pluck => 0.18,
         Instrument::Bass => 0.08,
         Instrument::Pad => 0.6,
         Instrument::Lead => 0.12,
@@ -262,6 +270,7 @@ mod tests {
             Instrument::Sine,
             Instrument::Square,
             Instrument::Triangle,
+            Instrument::Pluck,
             Instrument::Bass,
             Instrument::Pad,
             Instrument::Lead,
@@ -302,6 +311,12 @@ mod tests {
         let early_pad = pad.unreleased_amplitude();
         pad.elapsed_seconds = 0.35;
         assert!(pad.unreleased_amplitude() > early_pad * 5.0);
+
+        let mut pluck = voice(Instrument::Pluck, 330.0);
+        pluck.elapsed_seconds = 0.01;
+        let early_pluck = pluck.unreleased_amplitude();
+        pluck.elapsed_seconds = 0.71;
+        assert!(pluck.unreleased_amplitude() < early_pluck * 0.2);
 
         let mut bass = voice(Instrument::Bass, 110.0);
         bass.elapsed_seconds = 0.2;

@@ -65,6 +65,10 @@ pub enum ProcessError {
     InvalidReverbAmount,
     /// Distortion drive was non-finite or outside `1.0..=20.0`.
     InvalidDistortionDrive,
+    /// Compressor amount was non-finite or outside `0.0..=1.0`.
+    InvalidCompressorAmount,
+    /// An equalizer band gain was non-finite or outside `-12.0..=12.0` dB.
+    InvalidEqGain,
     /// A note frequency was not positive and finite.
     InvalidFrequency,
     /// A gain was non-finite or outside `0.0..=1.0`.
@@ -87,6 +91,8 @@ impl core::fmt::Display for ProcessError {
             Self::InvalidFrameRange => "frame range is outside the audio block",
             Self::InvalidReverbAmount => "reverb amount must be finite and in 0..=1",
             Self::InvalidDistortionDrive => "distortion drive must be finite and in 1..=20",
+            Self::InvalidCompressorAmount => "compressor amount must be finite and in 0..=1",
+            Self::InvalidEqGain => "equalizer gains must be finite and in -12..=12 dB",
             Self::InvalidFrequency => "frequency must be positive and finite",
             Self::InvalidGain => "gain must be finite and in 0..=1",
             Self::EventsNotOrdered => "events must be ordered by sample offset",

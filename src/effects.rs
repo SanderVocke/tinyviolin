@@ -1,10 +1,15 @@
 //! Post-processing effects for multichannel audio.
 
+use core::f32::consts::TAU;
+
 /// Settings for the post-processing effects.
 ///
-/// Reverb amount is a dry/wet value in `0.0..=1.0`. Distortion drive is a
-/// linear multiplier in `1.0..=20.0`. Both effects are bypassed by default.
+/// Reverb and compressor amounts are normalized values in `0.0..=1.0`.
+/// Distortion drive is a linear multiplier in `1.0..=20.0`. The equalizer's
+/// low, mid, and high controls are gains in decibels in `-12.0..=12.0`. Every
+/// effect is bypassed by default.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[allow(clippy::struct_excessive_bools)] // Each independent effect has a public bypass toggle.
 pub struct EffectSettings {
     /// Enable the algorithmic reverb.
     pub reverb_enabled: bool,
@@ -14,6 +19,18 @@ pub struct EffectSettings {
     pub distortion_enabled: bool,
     /// Distortion input drive in `1.0..=20.0`.
     pub distortion_drive: f32,
+    /// Enable the one-knob compressor.
+    pub compressor_enabled: bool,
+    /// Compression strength in `0.0..=1.0`.
+    pub compressor_amount: f32,
+    /// Enable the three-band equalizer.
+    pub eq_enabled: bool,
+    /// Low-band gain in decibels in `-12.0..=12.0`.
+    pub eq_low_db: f32,
+    /// Mid-band gain in decibels in `-12.0..=12.0`.
+    pub eq_mid_db: f32,
+    /// High-band gain in decibels in `-12.0..=12.0`.
+    pub eq_high_db: f32,
 }
 
 impl Default for EffectSettings {
@@ -23,22 +40,46 @@ impl Default for EffectSettings {
             reverb_amount: 0.25,
             distortion_enabled: false,
             distortion_drive: 4.0,
+            compressor_enabled: false,
+            compressor_amount: 0.5,
+            eq_enabled: false,
+            eq_low_db: 0.0,
+            eq_mid_db: 0.0,
+            eq_high_db: 0.0,
         }
     }
 }
 
 pub(crate) struct ChannelEffects {
+    equalizer: ThreeBandEq,
+    compressor: Compressor,
     reverb: Reverb,
 }
 
 impl ChannelEffects {
     pub(crate) fn new(sample_rate: f32) -> Self {
         Self {
+            equalizer: ThreeBandEq::new(sample_rate),
+            compressor: Compressor::new(sample_rate),
             reverb: Reverb::new(sample_rate),
         }
     }
 
     pub(crate) fn reset_dsp(&mut self) {
+        self.equalizer.reset();
+        self.compressor.reset();
+        self.reverb.reset();
+    }
+
+    pub(crate) fn reset_equalizer(&mut self) {
+        self.equalizer.reset();
+    }
+
+    pub(crate) fn reset_compressor(&mut self) {
+        self.compressor.reset();
+    }
+
+    pub(crate) fn reset_reverb(&mut self) {
         self.reverb.reset();
     }
 
@@ -48,12 +89,100 @@ impl ChannelEffects {
         } else {
             input
         };
-        let output = if settings.reverb_enabled {
-            self.reverb.process(distorted, settings.reverb_amount)
+        let equalized = if settings.eq_enabled {
+            self.equalizer.process(
+                distorted,
+                settings.eq_low_db,
+                settings.eq_mid_db,
+                settings.eq_high_db,
+            )
         } else {
             distorted
         };
+        let compressed = if settings.compressor_enabled {
+            self.compressor
+                .process(equalized, settings.compressor_amount)
+        } else {
+            equalized
+        };
+        let output = if settings.reverb_enabled {
+            self.reverb.process(compressed, settings.reverb_amount)
+        } else {
+            compressed
+        };
         output.clamp(-1.0, 1.0)
+    }
+}
+
+struct ThreeBandEq {
+    low: f32,
+    low_and_mid: f32,
+    low_coefficient: f32,
+    high_coefficient: f32,
+}
+
+impl ThreeBandEq {
+    fn new(sample_rate: f32) -> Self {
+        Self {
+            low: 0.0,
+            low_and_mid: 0.0,
+            low_coefficient: low_pass_coefficient(sample_rate, 250.0),
+            high_coefficient: low_pass_coefficient(sample_rate, 4_000.0),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.low = 0.0;
+        self.low_and_mid = 0.0;
+    }
+
+    fn process(&mut self, input: f32, low_db: f32, mid_db: f32, high_db: f32) -> f32 {
+        self.low += self.low_coefficient * (input - self.low);
+        self.low_and_mid += self.high_coefficient * (input - self.low_and_mid);
+        let mid = self.low_and_mid - self.low;
+        let high = input - self.low_and_mid;
+        self.low * db_to_gain(low_db) + mid * db_to_gain(mid_db) + high * db_to_gain(high_db)
+    }
+}
+
+struct Compressor {
+    envelope: f32,
+    attack_coefficient: f32,
+    release_coefficient: f32,
+}
+
+impl Compressor {
+    fn new(sample_rate: f32) -> Self {
+        Self {
+            envelope: 0.0,
+            attack_coefficient: envelope_coefficient(sample_rate, 0.01),
+            release_coefficient: envelope_coefficient(sample_rate, 0.1),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.envelope = 0.0;
+    }
+
+    fn process(&mut self, input: f32, amount: f32) -> f32 {
+        let level = input.abs();
+        let coefficient = if level > self.envelope {
+            self.attack_coefficient
+        } else {
+            self.release_coefficient
+        };
+        self.envelope += coefficient * (level - self.envelope);
+
+        if amount <= 0.0 {
+            return input;
+        }
+        let threshold = db_to_gain(-30.0 * amount);
+        if self.envelope <= threshold {
+            return input;
+        }
+        let ratio = 1.0 + 7.0 * amount;
+        let compressed_level = threshold * (self.envelope / threshold).powf(ratio.recip());
+        input * (compressed_level / self.envelope)
     }
 }
 
@@ -138,6 +267,19 @@ impl Comb {
     }
 }
 
+fn low_pass_coefficient(sample_rate: f32, frequency_hz: f32) -> f32 {
+    let frequency_hz = frequency_hz.min(sample_rate * 0.45);
+    1.0 - (-TAU * frequency_hz / sample_rate).exp()
+}
+
+fn envelope_coefficient(sample_rate: f32, seconds: f32) -> f32 {
+    1.0 - (-1.0 / (sample_rate * seconds)).exp()
+}
+
+fn db_to_gain(db: f32) -> f32 {
+    10.0_f32.powf(db / 20.0)
+}
+
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn delay_samples(sample_rate: f32, seconds: f32) -> usize {
     (sample_rate * seconds).round().max(1.0) as usize
@@ -167,6 +309,46 @@ mod tests {
         let loud = effects.process(0.8, settings);
         assert!(quiet > 0.05);
         assert!(loud <= 1.0);
+    }
+
+    #[test]
+    fn compressor_reduces_sustained_loud_audio() {
+        let mut effects = ChannelEffects::new(48_000.0);
+        let settings = EffectSettings {
+            compressor_enabled: true,
+            compressor_amount: 1.0,
+            ..EffectSettings::default()
+        };
+        let mut output = 0.0;
+        for _ in 0..4_800 {
+            output = effects.process(0.8, settings);
+        }
+        assert!(output > 0.0);
+        assert!(output < 0.3);
+    }
+
+    #[test]
+    fn equalizer_has_neutral_zero_db_and_independent_bands() {
+        let mut neutral = ChannelEffects::new(48_000.0);
+        let neutral_settings = EffectSettings {
+            eq_enabled: true,
+            ..EffectSettings::default()
+        };
+        for input in [0.25, -0.5, 0.75, -0.125] {
+            assert!((neutral.process(input, neutral_settings) - input).abs() < 1.0e-6);
+        }
+
+        let mut boosted = ChannelEffects::new(48_000.0);
+        let boosted_settings = EffectSettings {
+            eq_enabled: true,
+            eq_low_db: 12.0,
+            ..EffectSettings::default()
+        };
+        let mut output = 0.0;
+        for _ in 0..4_800 {
+            output = boosted.process(0.1, boosted_settings);
+        }
+        assert!(output > 0.3);
     }
 
     #[test]
