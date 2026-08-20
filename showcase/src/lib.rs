@@ -17,7 +17,7 @@ const DEFAULT_SAMPLE_RATE: f32 = 48_000.0;
 const DEFAULT_CHANNELS: usize = 2;
 const MAX_PLUGIN_CHANNELS: usize = 63;
 const EDITOR_WIDTH: f32 = 640.0;
-const EDITOR_HEIGHT: f32 = 440.0;
+const EDITOR_HEIGHT: f32 = 470.0;
 
 const fn audio_layout(channel_count: u32) -> AudioIOLayout {
     AudioIOLayout {
@@ -72,6 +72,12 @@ struct ShowcaseParams {
     #[id = "vocoder-sensitivity"]
     vocoder_sensitivity: FloatParam,
 
+    #[id = "noise-gate-enabled"]
+    noise_gate_enabled: BoolParam,
+
+    #[id = "noise-gate-threshold"]
+    noise_gate_threshold_db: FloatParam,
+
     #[id = "reverb-enabled"]
     reverb_enabled: BoolParam,
 
@@ -124,6 +130,17 @@ impl Default for ShowcaseParams {
             vocoder_enabled: BoolParam::new("Vocoder", false),
             vocoder_mix: normalized_parameter("Vocoder Mix", 1.0),
             vocoder_sensitivity: normalized_parameter("Vocoder Sensitivity", 0.5),
+            noise_gate_enabled: BoolParam::new("Noise Gate", false),
+            noise_gate_threshold_db: FloatParam::new(
+                "Noise Gate Threshold",
+                -50.0,
+                FloatRange::Linear {
+                    min: -80.0,
+                    max: 0.0,
+                },
+            )
+            .with_unit(" dB")
+            .with_value_to_string(formatters::v2s_f32_rounded(1)),
             reverb_enabled: BoolParam::new("Reverb", false),
             reverb_amount: normalized_parameter("Reverb Amount", 0.25),
             distortion_enabled: BoolParam::new("Distortion", false),
@@ -350,6 +367,8 @@ fn effect_settings(params: &ShowcaseParams) -> tinyviolin::EffectSettings {
         vocoder_enabled: params.vocoder_enabled.value(),
         vocoder_mix: params.vocoder_mix.value(),
         vocoder_sensitivity: params.vocoder_sensitivity.value(),
+        noise_gate_enabled: params.noise_gate_enabled.value(),
+        noise_gate_threshold_db: params.noise_gate_threshold_db.value(),
         reverb_enabled: params.reverb_enabled.value(),
         reverb_amount: params.reverb_amount.value(),
         distortion_enabled: params.distortion_enabled.value(),
@@ -431,6 +450,8 @@ mod tests {
         assert!(!params.vocoder_enabled.value());
         assert!((params.vocoder_mix.value() - 1.0).abs() < f32::EPSILON);
         assert!((params.vocoder_sensitivity.value() - 0.5).abs() < f32::EPSILON);
+        assert!(!params.noise_gate_enabled.value());
+        assert!((params.noise_gate_threshold_db.value() + 50.0).abs() < f32::EPSILON);
         assert!(!params.reverb_enabled.value());
         assert!((params.reverb_amount.value() - 0.25).abs() < f32::EPSILON);
         assert!(!params.distortion_enabled.value());

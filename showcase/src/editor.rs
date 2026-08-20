@@ -48,6 +48,7 @@ pub(crate) fn create_editor(
                         );
                     });
                     draw_vocoder(ui, setter, &params);
+                    draw_noise_gate(ui, setter, &params);
                     ui.horizontal(|ui| {
                         let mut reverb_enabled = params.reverb_enabled.value();
                         if ui.checkbox(&mut reverb_enabled, "Reverb").changed() {
@@ -133,6 +134,23 @@ fn draw_vocoder(ui: &mut egui::Ui, setter: &ParamSetter<'_>, params: &ShowcasePa
         ui.add_enabled(
             enabled,
             widgets::ParamSlider::for_param(&params.vocoder_sensitivity, setter).with_width(130.0),
+        );
+    });
+}
+
+fn draw_noise_gate(ui: &mut egui::Ui, setter: &ParamSetter<'_>, params: &ShowcaseParams) {
+    ui.horizontal(|ui| {
+        let mut enabled = params.noise_gate_enabled.value();
+        if ui.checkbox(&mut enabled, "Noise Gate").changed() {
+            setter.begin_set_parameter(&params.noise_gate_enabled);
+            setter.set_parameter(&params.noise_gate_enabled, enabled);
+            setter.end_set_parameter(&params.noise_gate_enabled);
+        }
+        ui.label("Threshold");
+        ui.add_enabled(
+            enabled,
+            widgets::ParamSlider::for_param(&params.noise_gate_threshold_db, setter)
+                .with_width(130.0),
         );
     });
 }

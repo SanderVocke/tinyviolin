@@ -12,6 +12,8 @@ fn prepared_showcase_processing_and_gui_drain_do_not_allocate() {
             vocoder_enabled: true,
             vocoder_mix: 0.8,
             vocoder_sensitivity: 0.6,
+            noise_gate_enabled: true,
+            noise_gate_threshold_db: -40.0,
             reverb_enabled: true,
             distortion_enabled: true,
             compressor_enabled: true,
