@@ -1,16 +1,31 @@
 //! Post-processing effects for multichannel audio.
 
+use core::array;
 use core::f32::consts::TAU;
+
+const VOCODER_BANDS: usize = 16;
+const VOCODER_MIN_FREQUENCY_HZ: f32 = 100.0;
+const VOCODER_MAX_FREQUENCY_HZ: f32 = 8_000.0;
+const VOCODER_FILTER_Q: f32 = 2.0;
+const VOCODER_ATTACK_SECONDS: f32 = 0.005;
+const VOCODER_RELEASE_SECONDS: f32 = 0.05;
+const VOCODER_MAX_SENSITIVITY_GAIN: f32 = 20.0;
 
 /// Settings for the post-processing effects.
 ///
-/// Reverb and compressor amounts are normalized values in `0.0..=1.0`.
-/// Distortion drive is a linear multiplier in `1.0..=20.0`. The equalizer's
-/// low, mid, and high controls are gains in decibels in `-12.0..=12.0`. Every
-/// effect is bypassed by default.
+/// Vocoder mix, vocoder sensitivity, reverb amount, and compressor amount are
+/// normalized values in `0.0..=1.0`. Distortion drive is a linear multiplier
+/// in `1.0..=20.0`. The equalizer's low, mid, and high controls are gains in
+/// decibels in `-12.0..=12.0`. Every effect is bypassed by default.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[allow(clippy::struct_excessive_bools)] // Each independent effect has a public bypass toggle.
 pub struct EffectSettings {
+    /// Enable the 16-band vocoder.
+    pub vocoder_enabled: bool,
+    /// Vocoder dry/wet mix in `0.0..=1.0`.
+    pub vocoder_mix: f32,
+    /// Vocoder modulator sensitivity in `0.0..=1.0`.
+    pub vocoder_sensitivity: f32,
     /// Enable the algorithmic reverb.
     pub reverb_enabled: bool,
     /// Reverb dry/wet amount in `0.0..=1.0`.
@@ -36,6 +51,9 @@ pub struct EffectSettings {
 impl Default for EffectSettings {
     fn default() -> Self {
         Self {
+            vocoder_enabled: false,
+            vocoder_mix: 1.0,
+            vocoder_sensitivity: 0.5,
             reverb_enabled: false,
             reverb_amount: 0.25,
             distortion_enabled: false,
@@ -50,7 +68,120 @@ impl Default for EffectSettings {
     }
 }
 
+pub(crate) struct Vocoder {
+    bands: [VocoderBand; VOCODER_BANDS],
+}
+
+impl Vocoder {
+    pub(crate) fn new(sample_rate: f32) -> Self {
+        let ratio = VOCODER_MAX_FREQUENCY_HZ / VOCODER_MIN_FREQUENCY_HZ;
+        Self {
+            bands: array::from_fn(|index| {
+                #[allow(clippy::cast_precision_loss)]
+                let position = index as f32 / (VOCODER_BANDS - 1) as f32;
+                let center_hz = VOCODER_MIN_FREQUENCY_HZ * ratio.powf(position);
+                VocoderBand::new(sample_rate, center_hz)
+            }),
+        }
+    }
+
+    pub(crate) fn reset(&mut self) {
+        for band in &mut self.bands {
+            band.reset();
+        }
+    }
+
+    pub(crate) fn process(&mut self, modulator: f32, carrier: f32, sensitivity: f32) -> f32 {
+        let sensitivity_gain = sensitivity * VOCODER_MAX_SENSITIVITY_GAIN;
+        self.bands
+            .iter_mut()
+            .map(|band| band.process(modulator, carrier, sensitivity_gain))
+            .sum()
+    }
+}
+
+struct VocoderBand {
+    analyzer: Biquad,
+    carrier: Biquad,
+    envelope: f32,
+    attack_coefficient: f32,
+    release_coefficient: f32,
+}
+
+impl VocoderBand {
+    fn new(sample_rate: f32, center_hz: f32) -> Self {
+        Self {
+            analyzer: Biquad::band_pass(sample_rate, center_hz, VOCODER_FILTER_Q),
+            carrier: Biquad::band_pass(sample_rate, center_hz, VOCODER_FILTER_Q),
+            envelope: 0.0,
+            attack_coefficient: envelope_coefficient(sample_rate, VOCODER_ATTACK_SECONDS),
+            release_coefficient: envelope_coefficient(sample_rate, VOCODER_RELEASE_SECONDS),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.analyzer.reset();
+        self.carrier.reset();
+        self.envelope = 0.0;
+    }
+
+    fn process(&mut self, modulator: f32, carrier: f32, sensitivity_gain: f32) -> f32 {
+        let level = self.analyzer.process(modulator).abs();
+        let coefficient = if level > self.envelope {
+            self.attack_coefficient
+        } else {
+            self.release_coefficient
+        };
+        self.envelope += coefficient * (level - self.envelope);
+        let shaped_envelope = (self.envelope * sensitivity_gain).min(1.0);
+        self.carrier.process(carrier) * shaped_envelope
+    }
+}
+
+struct Biquad {
+    b0: f32,
+    b1: f32,
+    b2: f32,
+    a1: f32,
+    a2: f32,
+    z1: f32,
+    z2: f32,
+}
+
+impl Biquad {
+    fn band_pass(sample_rate: f32, frequency_hz: f32, q: f32) -> Self {
+        let frequency_hz = frequency_hz.min(sample_rate * 0.45);
+        let omega = TAU * frequency_hz / sample_rate;
+        let sine = omega.sin();
+        let cosine = omega.cos();
+        let alpha = sine / (2.0 * q);
+        let a0_recip = (1.0 + alpha).recip();
+        Self {
+            b0: alpha * a0_recip,
+            b1: 0.0,
+            b2: -alpha * a0_recip,
+            a1: -2.0 * cosine * a0_recip,
+            a2: (1.0 - alpha) * a0_recip,
+            z1: 0.0,
+            z2: 0.0,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.z1 = 0.0;
+        self.z2 = 0.0;
+    }
+
+    fn process(&mut self, input: f32) -> f32 {
+        let output = self.b0 * input + self.z1;
+        self.z1 = suppress_denormal(self.b1 * input - self.a1 * output + self.z2);
+        self.z2 = suppress_denormal(self.b2 * input - self.a2 * output);
+        suppress_denormal(output)
+    }
+}
+
 pub(crate) struct ChannelEffects {
+    vocoder: Vocoder,
     equalizer: ThreeBandEq,
     compressor: Compressor,
     reverb: Reverb,
@@ -59,6 +190,7 @@ pub(crate) struct ChannelEffects {
 impl ChannelEffects {
     pub(crate) fn new(sample_rate: f32) -> Self {
         Self {
+            vocoder: Vocoder::new(sample_rate),
             equalizer: ThreeBandEq::new(sample_rate),
             compressor: Compressor::new(sample_rate),
             reverb: Reverb::new(sample_rate),
@@ -66,9 +198,14 @@ impl ChannelEffects {
     }
 
     pub(crate) fn reset_dsp(&mut self) {
+        self.vocoder.reset();
         self.equalizer.reset();
         self.compressor.reset();
         self.reverb.reset();
+    }
+
+    pub(crate) fn reset_vocoder(&mut self) {
+        self.vocoder.reset();
     }
 
     pub(crate) fn reset_equalizer(&mut self) {
@@ -83,11 +220,24 @@ impl ChannelEffects {
         self.reverb.reset();
     }
 
-    pub(crate) fn process(&mut self, input: f32, settings: EffectSettings) -> f32 {
-        let distorted = if settings.distortion_enabled {
-            distort(input, settings.distortion_drive)
+    pub(crate) fn process(
+        &mut self,
+        modulator: f32,
+        carrier: f32,
+        settings: EffectSettings,
+    ) -> f32 {
+        let dry = modulator + carrier;
+        let vocoded = if settings.vocoder_enabled {
+            self.vocoder
+                .process(modulator, carrier, settings.vocoder_sensitivity)
         } else {
-            input
+            dry
+        };
+        let vocoder_output = dry + settings.vocoder_mix * (vocoded - dry);
+        let distorted = if settings.distortion_enabled {
+            distort(vocoder_output, settings.distortion_drive)
+        } else {
+            vocoder_output
         };
         let equalized = if settings.eq_enabled {
             self.equalizer.process(
@@ -295,7 +445,93 @@ fn distort(input: f32, drive: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChannelEffects, EffectSettings};
+    #![allow(clippy::float_cmp)] // Exact zero proves that neither raw vocoder source leaks.
+    use core::f32::consts::TAU;
+
+    use super::{Biquad, ChannelEffects, EffectSettings, Vocoder};
+
+    fn sine(phase: usize, frequency_hz: f32, sample_rate: f32) -> f32 {
+        #[allow(clippy::cast_precision_loss)]
+        let seconds = phase as f32 / sample_rate;
+        (TAU * frequency_hz * seconds).sin()
+    }
+
+    #[test]
+    fn band_pass_is_frequency_selective_and_resettable() {
+        let sample_rate = 48_000.0;
+        let energy = |frequency_hz| {
+            let mut filter = Biquad::band_pass(sample_rate, 1_000.0, 2.0);
+            (0..48_000)
+                .map(|frame| filter.process(sine(frame, frequency_hz, sample_rate)).abs())
+                .skip(4_800)
+                .sum::<f32>()
+        };
+        assert!(energy(1_000.0) > energy(100.0) * 5.0);
+
+        let mut filter = Biquad::band_pass(sample_rate, 1_000.0, 2.0);
+        for frame in 0..1_000 {
+            let _ = filter.process(sine(frame, 1_000.0, sample_rate));
+        }
+        filter.reset();
+        assert_eq!(filter.process(0.0), 0.0);
+    }
+
+    #[test]
+    fn vocoder_requires_both_sources_and_sensitivity_controls_response() {
+        let sample_rate = 48_000.0;
+        let render = |modulator_gain: f32, carrier_gain: f32, sensitivity: f32| {
+            let mut vocoder = Vocoder::new(sample_rate);
+            (0..24_000)
+                .map(|frame| {
+                    let modulator = modulator_gain
+                        * (sine(frame, 220.0, sample_rate) + 0.5 * sine(frame, 880.0, sample_rate));
+                    let carrier = carrier_gain
+                        * (sine(frame, 110.0, sample_rate)
+                            + 0.5 * sine(frame, 330.0, sample_rate)
+                            + 0.25 * sine(frame, 990.0, sample_rate));
+                    vocoder.process(modulator, carrier, sensitivity).abs()
+                })
+                .skip(4_800)
+                .sum::<f32>()
+        };
+
+        assert_eq!(render(1.0, 0.0, 1.0), 0.0);
+        assert_eq!(render(0.0, 1.0, 1.0), 0.0);
+        let low = render(0.05, 0.25, 0.25);
+        let high = render(0.05, 0.25, 0.75);
+        assert!(low > 0.0);
+        assert!(high > low * 2.0);
+    }
+
+    #[test]
+    fn vocoder_envelope_releases_and_reset_clears_all_state() {
+        let mut vocoder = Vocoder::new(1_000.0);
+        for frame in 0..500 {
+            let sample = sine(frame, 100.0, 1_000.0);
+            let _ = vocoder.process(sample, sample, 1.0);
+        }
+        let mut tail = 0.0_f32;
+        for frame in 0..1_000 {
+            tail = vocoder.process(0.0, sine(frame, 100.0, 1_000.0), 1.0).abs();
+        }
+        assert!(tail < 1.0e-5);
+
+        vocoder.reset();
+        assert_eq!(vocoder.process(0.0, 0.0, 1.0), 0.0);
+    }
+
+    #[test]
+    fn vocoder_remains_finite_at_supported_sample_rate_extremes() {
+        for sample_rate in [1.0, 8_000.0, 48_000.0, 768_000.0] {
+            let mut vocoder = Vocoder::new(sample_rate);
+            for frame in 0..10_000 {
+                #[allow(clippy::cast_precision_loss)]
+                let input = (frame as f32 * 0.17).sin();
+                let output = vocoder.process(input, -input, 1.0);
+                assert!(output.is_finite());
+            }
+        }
+    }
 
     #[test]
     fn distortion_is_bounded_and_adds_harmonic_shaping() {
@@ -305,8 +541,8 @@ mod tests {
             distortion_drive: 8.0,
             ..EffectSettings::default()
         };
-        let quiet = effects.process(0.05, settings);
-        let loud = effects.process(0.8, settings);
+        let quiet = effects.process(0.05, 0.0, settings);
+        let loud = effects.process(0.8, 0.0, settings);
         assert!(quiet > 0.05);
         assert!(loud <= 1.0);
     }
@@ -321,7 +557,7 @@ mod tests {
         };
         let mut output = 0.0;
         for _ in 0..4_800 {
-            output = effects.process(0.8, settings);
+            output = effects.process(0.8, 0.0, settings);
         }
         assert!(output > 0.0);
         assert!(output < 0.3);
@@ -335,7 +571,7 @@ mod tests {
             ..EffectSettings::default()
         };
         for input in [0.25, -0.5, 0.75, -0.125] {
-            assert!((neutral.process(input, neutral_settings) - input).abs() < 1.0e-6);
+            assert!((neutral.process(input, 0.0, neutral_settings) - input).abs() < 1.0e-6);
         }
 
         let mut boosted = ChannelEffects::new(48_000.0);
@@ -346,7 +582,7 @@ mod tests {
         };
         let mut output = 0.0;
         for _ in 0..4_800 {
-            output = boosted.process(0.1, boosted_settings);
+            output = boosted.process(0.1, 0.0, boosted_settings);
         }
         assert!(output > 0.3);
     }
@@ -359,10 +595,10 @@ mod tests {
             reverb_amount: 0.5,
             ..EffectSettings::default()
         };
-        let _ = effects.process(1.0, settings);
+        let _ = effects.process(1.0, 0.0, settings);
         let mut tail = false;
         for _ in 0..100 {
-            let sample = effects.process(0.0, settings);
+            let sample = effects.process(0.0, 0.0, settings);
             assert!(sample.is_finite());
             tail |= sample.abs() > 0.0;
         }

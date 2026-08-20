@@ -246,6 +246,9 @@ impl Plugin for TinyViolinShowcase {
         }
 
         let settings = tinyviolin::EffectSettings {
+            vocoder_enabled: false,
+            vocoder_mix: 1.0,
+            vocoder_sensitivity: 0.5,
             reverb_enabled: self.params.reverb_enabled.value(),
             reverb_amount: self.params.reverb_amount.value(),
             distortion_enabled: self.params.distortion_enabled.value(),

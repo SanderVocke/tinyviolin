@@ -82,6 +82,9 @@ fn prepared_core_and_midi_processing_do_not_allocate() {
     let mut audio = AudioProcessor::<8>::new(48_000.0, 3).unwrap();
     audio
         .set_effect_settings(EffectSettings {
+            vocoder_enabled: true,
+            vocoder_mix: 0.8,
+            vocoder_sensitivity: 0.6,
             reverb_enabled: true,
             distortion_enabled: true,
             compressor_enabled: true,

@@ -81,6 +81,10 @@ pub enum ProcessError {
     ChannelLengthMismatch,
     /// A requested frame range was reversed or outside the block.
     InvalidFrameRange,
+    /// Vocoder dry/wet mix was non-finite or outside `0.0..=1.0`.
+    InvalidVocoderMix,
+    /// Vocoder sensitivity was non-finite or outside `0.0..=1.0`.
+    InvalidVocoderSensitivity,
     /// Reverb amount was non-finite or outside `0.0..=1.0`.
     InvalidReverbAmount,
     /// Distortion drive was non-finite or outside `1.0..=20.0`.
@@ -113,6 +117,8 @@ impl core::fmt::Display for ProcessError {
             Self::ChannelCountMismatch => "audio block channel count does not match configuration",
             Self::ChannelLengthMismatch => "audio channels must have equal lengths",
             Self::InvalidFrameRange => "frame range is outside the audio block",
+            Self::InvalidVocoderMix => "vocoder mix must be finite and in 0..=1",
+            Self::InvalidVocoderSensitivity => "vocoder sensitivity must be finite and in 0..=1",
             Self::InvalidReverbAmount => "reverb amount must be finite and in 0..=1",
             Self::InvalidDistortionDrive => "distortion drive must be finite and in 1..=20",
             Self::InvalidCompressorAmount => "compressor amount must be finite and in 0..=1",

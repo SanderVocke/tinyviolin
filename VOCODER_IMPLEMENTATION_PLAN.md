@@ -55,23 +55,23 @@ Out of scope:
 
 ### Stage 1 — Define and test the core vocoder DSP
 
-- [ ] Add fixed-size band-pass filter and envelope-follower primitives, setup-time coefficient generation, reset support, and a 16-band per-channel vocoder state in `src/effects.rs` (or a focused internal DSP module if that keeps responsibilities clearer).
-- [ ] Implement modulator analysis, carrier-band shaping, deterministic band summation/normalization, sensitivity scaling, denormal suppression, and finite output handling.
-- [ ] Add focused tests for band selectivity, envelope attack/release, sensitivity response, missing modulator/carrier behavior, reset behavior, low/common/high accepted sample rates, and long-run finite output.
-- [ ] Render or otherwise inspect a representative speech-like modulator with a harmonically rich carrier; tune only fixed coefficients/constants required for intelligible basic behavior.
-- [ ] Run core formatting, clippy, and focused tests.
-- [ ] Commit the core DSP milestone.
+- [x] Add fixed-size band-pass filter and envelope-follower primitives, setup-time coefficient generation, reset support, and a 16-band per-channel vocoder state in `src/effects.rs` (or a focused internal DSP module if that keeps responsibilities clearer).
+- [x] Implement modulator analysis, carrier-band shaping, deterministic band summation/normalization, sensitivity scaling, denormal suppression, and finite output handling.
+- [x] Add focused tests for band selectivity, envelope attack/release, sensitivity response, missing modulator/carrier behavior, reset behavior, low/common/high accepted sample rates, and long-run finite output.
+- [x] Render or otherwise inspect a representative speech-like modulator with a harmonically rich carrier; tune only fixed coefficients/constants required for intelligible basic behavior.
+- [x] Run core formatting, clippy, and focused tests.
+- [x] Commit the core DSP milestone.
 
 ### Stage 2 — Integrate vocoder routing and public `AudioProcessor` controls
 
 Depends on Stage 1.
 
-- [ ] Extend `EffectSettings` with bypassed-by-default vocoder enable plus normalized mix and sensitivity defaults; add validation errors and dedicated `AudioProcessor` setters.
-- [ ] Change the render path to pass separate input/modulator and synthesized carrier samples into per-channel processing, interpolate dry and vocoded paths, and then run the existing post-effect chain in the accepted order.
-- [ ] Reset vocoder state on enable transitions and from `reset_dsp()`/`panic()` without disturbing settings or unrelated effect state.
-- [ ] Add routing tests proving disabled compatibility, dry/full-wet behavior, per-channel modulation with a shared carrier, no raw-source leakage at full wet, sample-timed MIDI operation, and downstream effect processing.
-- [ ] Extend realtime-allocation coverage with the vocoder enabled.
-- [ ] Run the core test suite and commit the routing/API milestone.
+- [x] Extend `EffectSettings` with bypassed-by-default vocoder enable plus normalized mix and sensitivity defaults; add validation errors and dedicated `AudioProcessor` setters.
+- [x] Change the render path to pass separate input/modulator and synthesized carrier samples into per-channel processing, interpolate dry and vocoded paths, and then run the existing post-effect chain in the accepted order.
+- [x] Reset vocoder state on enable transitions and from `reset_dsp()`/`panic()` without disturbing settings or unrelated effect state.
+- [x] Add routing tests proving disabled compatibility, dry/full-wet behavior, per-channel modulation with a shared carrier, no raw-source leakage at full wet, sample-timed MIDI operation, and downstream effect processing.
+- [x] Extend realtime-allocation coverage with the vocoder enabled.
+- [x] Run the core test suite and commit the routing/API milestone.
 
 ### Stage 3 — Version core state and update public documentation/showcase
 

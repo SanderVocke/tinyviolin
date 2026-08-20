@@ -9,7 +9,7 @@ use crate::state::{Reader, push_f32, push_u16, push_u32};
 use crate::{EffectSettings, Event, Preset, ProcessError, StateError, Synth, TimedEvent};
 
 const AUDIO_STATE_MAGIC: &[u8; 4] = b"TVAS";
-const AUDIO_STATE_VERSION: u16 = 2;
+const AUDIO_STATE_VERSION: u16 = 3;
 
 /// A polyphonic synthesizer, per-channel input mixer, and post-effects chain.
 ///
@@ -111,6 +111,9 @@ impl<const VOICES: usize, const MIDI_LAYERS: usize> AudioProcessor<VOICES, MIDI_
     pub fn set_effect_settings(&mut self, settings: EffectSettings) -> Result<(), ProcessError> {
         validate_effect_settings(settings)?;
         for effects in &mut self.channel_effects {
+            if settings.vocoder_enabled != self.settings.vocoder_enabled {
+                effects.reset_vocoder();
+            }
             if settings.reverb_enabled != self.settings.reverb_enabled {
                 effects.reset_reverb();
             }
@@ -122,6 +125,44 @@ impl<const VOICES: usize, const MIDI_LAYERS: usize> AudioProcessor<VOICES, MIDI_
             }
         }
         self.settings = settings;
+        Ok(())
+    }
+
+    /// Enable or bypass the 16-band vocoder.
+    pub fn set_vocoder_enabled(&mut self, enabled: bool) {
+        if enabled != self.settings.vocoder_enabled {
+            for effects in &mut self.channel_effects {
+                effects.reset_vocoder();
+            }
+            self.settings.vocoder_enabled = enabled;
+        }
+    }
+
+    /// Set the vocoder dry/wet mix in `0.0..=1.0`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessError::InvalidVocoderMix`] for an out-of-range or
+    /// non-finite value.
+    pub fn set_vocoder_mix(&mut self, mix: f32) -> Result<(), ProcessError> {
+        if !mix.is_finite() || !(0.0..=1.0).contains(&mix) {
+            return Err(ProcessError::InvalidVocoderMix);
+        }
+        self.settings.vocoder_mix = mix;
+        Ok(())
+    }
+
+    /// Set the vocoder modulator sensitivity in `0.0..=1.0`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessError::InvalidVocoderSensitivity`] for an out-of-range
+    /// or non-finite value.
+    pub fn set_vocoder_sensitivity(&mut self, sensitivity: f32) -> Result<(), ProcessError> {
+        if !sensitivity.is_finite() || !(0.0..=1.0).contains(&sensitivity) {
+            return Err(ProcessError::InvalidVocoderSensitivity);
+        }
+        self.settings.vocoder_sensitivity = sensitivity;
         Ok(())
     }
 
@@ -398,6 +439,9 @@ impl<const VOICES: usize, const MIDI_LAYERS: usize> AudioProcessor<VOICES, MIDI_
         push_f32(&mut output, self.settings.eq_low_db);
         push_f32(&mut output, self.settings.eq_mid_db);
         push_f32(&mut output, self.settings.eq_high_db);
+        output.push(u8::from(self.settings.vocoder_enabled));
+        push_f32(&mut output, self.settings.vocoder_mix);
+        push_f32(&mut output, self.settings.vocoder_sensitivity);
         output
     }
 
@@ -417,7 +461,7 @@ impl<const VOICES: usize, const MIDI_LAYERS: usize> AudioProcessor<VOICES, MIDI_
             return Err(StateError::InvalidData);
         }
         let version = reader.u16()?;
-        if !matches!(version, 1 | AUDIO_STATE_VERSION) {
+        if !matches!(version, 1 | 2 | AUDIO_STATE_VERSION) {
             return Err(StateError::UnsupportedVersion);
         }
         let midi_len = usize::try_from(reader.u32()?).map_err(|_| StateError::InvalidData)?;
@@ -436,6 +480,11 @@ impl<const VOICES: usize, const MIDI_LAYERS: usize> AudioProcessor<VOICES, MIDI_
             settings.eq_low_db = reader.f32()?;
             settings.eq_mid_db = reader.f32()?;
             settings.eq_high_db = reader.f32()?;
+        }
+        if version >= 3 {
+            settings.vocoder_enabled = read_bool(&mut reader)?;
+            settings.vocoder_mix = reader.f32()?;
+            settings.vocoder_sensitivity = reader.f32()?;
         }
         if !reader.is_finished() {
             return Err(StateError::InvalidData);
@@ -531,8 +580,7 @@ impl<const VOICES: usize, const MIDI_LAYERS: usize> AudioProcessor<VOICES, MIDI_
         for frame in range {
             let synthesized = self.midi.engine_mut().next_sample();
             for (channel, effects) in channels.iter_mut().zip(&mut self.channel_effects) {
-                let mixed = channel[frame] + synthesized;
-                channel[frame] = effects.process(mixed, self.settings);
+                channel[frame] = effects.process(channel[frame], synthesized, self.settings);
             }
         }
     }
@@ -561,6 +609,14 @@ fn read_bool(reader: &mut Reader<'_>) -> Result<bool, StateError> {
 }
 
 fn validate_effect_settings(settings: EffectSettings) -> Result<(), ProcessError> {
+    if !settings.vocoder_mix.is_finite() || !(0.0..=1.0).contains(&settings.vocoder_mix) {
+        return Err(ProcessError::InvalidVocoderMix);
+    }
+    if !settings.vocoder_sensitivity.is_finite()
+        || !(0.0..=1.0).contains(&settings.vocoder_sensitivity)
+    {
+        return Err(ProcessError::InvalidVocoderSensitivity);
+    }
     if !settings.reverb_amount.is_finite() || !(0.0..=1.0).contains(&settings.reverb_amount) {
         return Err(ProcessError::InvalidReverbAmount);
     }
@@ -676,6 +732,9 @@ mod tests {
         effected.set_midi_layer(0, 69, 0, layer).unwrap();
         effected
             .set_effect_settings(EffectSettings {
+                vocoder_enabled: false,
+                vocoder_mix: 1.0,
+                vocoder_sensitivity: 0.5,
                 reverb_enabled: true,
                 reverb_amount: 0.5,
                 distortion_enabled: true,
@@ -706,6 +765,74 @@ mod tests {
                 .any(|sample| sample.abs() > 0.0)
         );
         assert!(effected_output.iter().all(|sample| sample.is_finite()));
+    }
+
+    #[test]
+    fn full_wet_vocoder_uses_input_channels_as_independent_modulators() {
+        let mut processor = AudioProcessor::<1>::new(48_000.0, 2).unwrap();
+        processor.select_preset(Preset::Square);
+        processor
+            .set_effect_settings(EffectSettings {
+                vocoder_enabled: true,
+                vocoder_mix: 1.0,
+                vocoder_sensitivity: 0.75,
+                ..EffectSettings::default()
+            })
+            .unwrap();
+        processor
+            .dispatch_midi(MidiMessage::new(&[0x90, 45, 127]).unwrap())
+            .unwrap();
+
+        let mut silent_modulator = [0.0; 4_096];
+        let mut active_modulator = [0.2; 4_096];
+        processor
+            .process(&mut [&mut silent_modulator, &mut active_modulator], &[])
+            .unwrap();
+
+        assert!(silent_modulator.iter().all(|sample| *sample == 0.0));
+        assert!(
+            active_modulator[512..]
+                .iter()
+                .any(|sample| sample.abs() > 1.0e-5)
+        );
+        assert!(active_modulator.iter().all(|sample| sample.is_finite()));
+    }
+
+    #[test]
+    fn full_wet_vocoder_does_not_leak_a_modulator_without_a_carrier() {
+        let mut processor = AudioProcessor::<1>::new(48_000.0, 1).unwrap();
+        processor
+            .set_effect_settings(EffectSettings {
+                vocoder_enabled: true,
+                vocoder_mix: 1.0,
+                vocoder_sensitivity: 1.0,
+                ..EffectSettings::default()
+            })
+            .unwrap();
+        let mut input = [0.25; 1_024];
+        processor.process(&mut [&mut input], &[]).unwrap();
+        assert!(input.iter().all(|sample| *sample == 0.0));
+    }
+
+    #[test]
+    fn vocoder_zero_mix_is_the_existing_dry_path_and_toggle_resets_state() {
+        let mut processor = AudioProcessor::<1>::new(48_000.0, 1).unwrap();
+        processor.select_preset(Preset::Square);
+        processor.set_vocoder_enabled(true);
+        processor.set_vocoder_mix(0.0).unwrap();
+        processor
+            .dispatch_midi(MidiMessage::new(&[0x90, 45, 127]).unwrap())
+            .unwrap();
+        let mut input = [0.2; 512];
+        processor.process(&mut [&mut input], &[]).unwrap();
+        assert!(input.iter().any(|sample| (*sample - 0.2).abs() > 1.0e-5));
+
+        processor.set_vocoder_mix(1.0).unwrap();
+        processor.set_vocoder_enabled(false);
+        processor.set_vocoder_enabled(true);
+        let mut no_modulator = [0.0; 512];
+        processor.process(&mut [&mut no_modulator], &[]).unwrap();
+        assert!(no_modulator.iter().all(|sample| *sample == 0.0));
     }
 
     #[test]
@@ -742,6 +869,14 @@ mod tests {
             Err(ProcessError::InvalidReverbAmount)
         );
         assert_eq!(processor.effect_settings(), old);
+        assert_eq!(
+            processor.set_vocoder_mix(-0.1),
+            Err(ProcessError::InvalidVocoderMix)
+        );
+        assert_eq!(
+            processor.set_vocoder_sensitivity(f32::INFINITY),
+            Err(ProcessError::InvalidVocoderSensitivity)
+        );
         assert_eq!(
             processor.set_compressor_amount(1.1),
             Err(ProcessError::InvalidCompressorAmount)
@@ -781,6 +916,9 @@ mod tests {
         source.select_preset(Preset::PercussionKit);
         source
             .set_effect_settings(EffectSettings {
+                vocoder_enabled: true,
+                vocoder_mix: 0.75,
+                vocoder_sensitivity: 0.625,
                 reverb_enabled: true,
                 reverb_amount: 0.375,
                 distortion_enabled: true,
@@ -804,12 +942,25 @@ mod tests {
         assert_eq!(restored.sample_rate(), 44_100.0);
         assert_eq!(restored.channel_count(), 1);
 
-        // Version 1 states ended after the distortion drive. Loading one keeps
-        // the old controls and supplies bypassed defaults for newer effects.
-        let mut version_one = state.clone();
+        // Version 2 states ended after the EQ gains and supply bypassed
+        // vocoder defaults.
+        let mut version_two = state.clone();
+        version_two[4..6].copy_from_slice(&2_u16.to_le_bytes());
+        version_two.truncate(version_two.len() - 9);
+        let mut legacy = AudioProcessor::<4, 1>::new(48_000.0, 1).unwrap();
+        legacy.load_state(&version_two).unwrap();
+        let legacy_settings = legacy.effect_settings();
+        assert!(!legacy_settings.vocoder_enabled);
+        assert_eq!(legacy_settings.vocoder_mix, 1.0);
+        assert_eq!(legacy_settings.vocoder_sensitivity, 0.5);
+        assert!(legacy_settings.compressor_enabled);
+        assert!(legacy_settings.eq_enabled);
+
+        // Version 1 states ended after the distortion drive and also supply
+        // bypassed defaults for the version 2 effects.
+        let mut version_one = version_two;
         version_one[4..6].copy_from_slice(&1_u16.to_le_bytes());
         version_one.truncate(version_one.len() - 18);
-        let mut legacy = AudioProcessor::<4, 1>::new(48_000.0, 1).unwrap();
         legacy.load_state(&version_one).unwrap();
         let legacy_settings = legacy.effect_settings();
         assert!(legacy_settings.reverb_enabled);
@@ -818,6 +969,7 @@ mod tests {
         assert_eq!(legacy_settings.distortion_drive, 7.5);
         assert!(!legacy_settings.compressor_enabled);
         assert!(!legacy_settings.eq_enabled);
+        assert!(!legacy_settings.vocoder_enabled);
     }
 
     #[test]
