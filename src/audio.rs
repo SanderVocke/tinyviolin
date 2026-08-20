@@ -1,6 +1,6 @@
 use core::ops::Range;
 
-use crate::effects::ChannelEffects;
+use crate::effects::{ChannelEffects, NOISE_GATE_MAX_THRESHOLD_DB, NOISE_GATE_MIN_THRESHOLD_DB};
 use crate::engine::validate_events;
 use crate::midi::{
     MidiError, MidiLayer, MidiMessage, MidiSynth, TimedMidiMessage, validate_timed_messages,
@@ -9,17 +9,18 @@ use crate::state::{Reader, push_f32, push_u16, push_u32};
 use crate::{EffectSettings, Event, Preset, ProcessError, StateError, Synth, TimedEvent};
 
 const AUDIO_STATE_MAGIC: &[u8; 4] = b"TVAS";
-const AUDIO_STATE_VERSION: u16 = 3;
+const AUDIO_STATE_VERSION: u16 = 4;
 
 /// A polyphonic synthesizer, per-channel input mixer, and post-effects chain.
 ///
 /// The channel count is selected during construction and may be any nonzero
 /// value. Processing is in-place: each channel initially contains its audio
 /// input. The same synthesized sample is available to every channel as a dry
-/// source or vocoder carrier. Vocoder/dry mixing precedes distortion,
-/// three-band EQ, compression, and reverb. Construction allocates effect delay
-/// storage and initializes fixed vocoder state; dispatch and processing do not
-/// allocate.
+/// source or vocoder carrier. Noise gating precedes vocoder/dry mixing,
+/// distortion, three-band EQ, compression, and reverb. When the gate and
+/// vocoder are both enabled, microphone activity also gates the synth carrier.
+/// Construction allocates effect delay and gate-tracking storage and initializes
+/// fixed vocoder state; dispatch and processing do not allocate.
 pub struct AudioProcessor<const VOICES: usize = 32, const MIDI_LAYERS: usize = 2> {
     midi: MidiSynth<VOICES, MIDI_LAYERS>,
     channel_effects: Vec<ChannelEffects>,
@@ -115,6 +116,9 @@ impl<const VOICES: usize, const MIDI_LAYERS: usize> AudioProcessor<VOICES, MIDI_
             if settings.vocoder_enabled != self.settings.vocoder_enabled {
                 effects.reset_vocoder();
             }
+            if settings.noise_gate_enabled != self.settings.noise_gate_enabled {
+                effects.reset_noise_gate();
+            }
             if settings.reverb_enabled != self.settings.reverb_enabled {
                 effects.reset_reverb();
             }
@@ -164,6 +168,31 @@ impl<const VOICES: usize, const MIDI_LAYERS: usize> AudioProcessor<VOICES, MIDI_
             return Err(ProcessError::InvalidVocoderSensitivity);
         }
         self.settings.vocoder_sensitivity = sensitivity;
+        Ok(())
+    }
+
+    /// Enable or bypass the input noise gate.
+    ///
+    /// When the vocoder is also enabled, the gate additionally suppresses the
+    /// synth carrier while microphone input is below threshold.
+    pub fn set_noise_gate_enabled(&mut self, enabled: bool) {
+        if enabled != self.settings.noise_gate_enabled {
+            for effects in &mut self.channel_effects {
+                effects.reset_noise_gate();
+            }
+            self.settings.noise_gate_enabled = enabled;
+        }
+    }
+
+    /// Set the noise-gate threshold in `-80.0..=0.0` dB.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessError::InvalidNoiseGateThreshold`] for an out-of-range
+    /// or non-finite value.
+    pub fn set_noise_gate_threshold_db(&mut self, threshold_db: f32) -> Result<(), ProcessError> {
+        validate_noise_gate_threshold(threshold_db)?;
+        self.settings.noise_gate_threshold_db = threshold_db;
         Ok(())
     }
 
@@ -443,6 +472,8 @@ impl<const VOICES: usize, const MIDI_LAYERS: usize> AudioProcessor<VOICES, MIDI_
         output.push(u8::from(self.settings.vocoder_enabled));
         push_f32(&mut output, self.settings.vocoder_mix);
         push_f32(&mut output, self.settings.vocoder_sensitivity);
+        output.push(u8::from(self.settings.noise_gate_enabled));
+        push_f32(&mut output, self.settings.noise_gate_threshold_db);
         output
     }
 
@@ -462,7 +493,7 @@ impl<const VOICES: usize, const MIDI_LAYERS: usize> AudioProcessor<VOICES, MIDI_
             return Err(StateError::InvalidData);
         }
         let version = reader.u16()?;
-        if !matches!(version, 1 | 2 | AUDIO_STATE_VERSION) {
+        if !matches!(version, 1 | 2 | 3 | AUDIO_STATE_VERSION) {
             return Err(StateError::UnsupportedVersion);
         }
         let midi_len = usize::try_from(reader.u32()?).map_err(|_| StateError::InvalidData)?;
@@ -486,6 +517,10 @@ impl<const VOICES: usize, const MIDI_LAYERS: usize> AudioProcessor<VOICES, MIDI_
             settings.vocoder_enabled = read_bool(&mut reader)?;
             settings.vocoder_mix = reader.f32()?;
             settings.vocoder_sensitivity = reader.f32()?;
+        }
+        if version >= 4 {
+            settings.noise_gate_enabled = read_bool(&mut reader)?;
+            settings.noise_gate_threshold_db = reader.f32()?;
         }
         if !reader.is_finished() {
             return Err(StateError::InvalidData);
@@ -618,6 +653,7 @@ fn validate_effect_settings(settings: EffectSettings) -> Result<(), ProcessError
     {
         return Err(ProcessError::InvalidVocoderSensitivity);
     }
+    validate_noise_gate_threshold(settings.noise_gate_threshold_db)?;
     if !settings.reverb_amount.is_finite() || !(0.0..=1.0).contains(&settings.reverb_amount) {
         return Err(ProcessError::InvalidReverbAmount);
     }
@@ -632,6 +668,15 @@ fn validate_effect_settings(settings: EffectSettings) -> Result<(), ProcessError
     validate_eq_gain(settings.eq_low_db)?;
     validate_eq_gain(settings.eq_mid_db)?;
     validate_eq_gain(settings.eq_high_db)?;
+    Ok(())
+}
+
+fn validate_noise_gate_threshold(threshold_db: f32) -> Result<(), ProcessError> {
+    if !threshold_db.is_finite()
+        || !(NOISE_GATE_MIN_THRESHOLD_DB..=NOISE_GATE_MAX_THRESHOLD_DB).contains(&threshold_db)
+    {
+        return Err(ProcessError::InvalidNoiseGateThreshold);
+    }
     Ok(())
 }
 
@@ -736,6 +781,8 @@ mod tests {
                 vocoder_enabled: false,
                 vocoder_mix: 1.0,
                 vocoder_sensitivity: 0.5,
+                noise_gate_enabled: false,
+                noise_gate_threshold_db: -50.0,
                 reverb_enabled: true,
                 reverb_amount: 0.5,
                 distortion_enabled: true,
@@ -837,6 +884,87 @@ mod tests {
     }
 
     #[test]
+    fn noise_gate_only_suppresses_quiet_input_without_suppressing_synth() {
+        let mut processor = AudioProcessor::<1>::new(1_000.0, 1).unwrap();
+        processor.select_preset(Preset::Square);
+        processor.set_noise_gate_enabled(true);
+        processor.set_noise_gate_threshold_db(-20.0).unwrap();
+        processor
+            .dispatch_midi(MidiMessage::new(&[0x90, 45, 127]).unwrap())
+            .unwrap();
+
+        let mut quiet_input = [0.01; 128];
+        processor.process(&mut [&mut quiet_input], &[]).unwrap();
+        assert!(quiet_input.iter().any(|sample| sample.abs() > 0.05));
+
+        processor.panic();
+        let mut quiet_without_synth = [0.01; 128];
+        processor
+            .process(&mut [&mut quiet_without_synth], &[])
+            .unwrap();
+        assert_eq!(quiet_without_synth, [0.0; 128]);
+    }
+
+    #[test]
+    fn combined_gate_and_vocoder_gate_a_held_carrier_at_zero_mix() {
+        let mut processor = AudioProcessor::<1>::new(1_000.0, 1).unwrap();
+        processor.select_preset(Preset::Square);
+        processor
+            .set_effect_settings(EffectSettings {
+                vocoder_enabled: true,
+                vocoder_mix: 0.0,
+                noise_gate_enabled: true,
+                noise_gate_threshold_db: -20.0,
+                ..EffectSettings::default()
+            })
+            .unwrap();
+        processor
+            .dispatch_midi(MidiMessage::new(&[0x90, 45, 127]).unwrap())
+            .unwrap();
+
+        let mut silent = [0.0; 100];
+        processor.process(&mut [&mut silent], &[]).unwrap();
+        assert_eq!(silent, [0.0; 100]);
+
+        let mut talking = [0.5; 100];
+        processor.process(&mut [&mut talking], &[]).unwrap();
+        assert!(talking[20..].iter().any(|sample| sample.abs() > 0.05));
+
+        let mut closed_again = [0.0; 100];
+        processor.process(&mut [&mut closed_again], &[]).unwrap();
+        assert_eq!(closed_again[70..], [0.0; 30]);
+
+        let mut talking_again = [0.5; 100];
+        processor.process(&mut [&mut talking_again], &[]).unwrap();
+        assert!(talking_again[20..].iter().any(|sample| sample.abs() > 0.05));
+    }
+
+    #[test]
+    fn combined_gate_is_independent_per_channel_with_shared_carrier() {
+        let mut processor = AudioProcessor::<1>::new(48_000.0, 2).unwrap();
+        processor.select_preset(Preset::Square);
+        processor
+            .set_effect_settings(EffectSettings {
+                vocoder_enabled: true,
+                vocoder_mix: 0.0,
+                noise_gate_enabled: true,
+                noise_gate_threshold_db: -20.0,
+                ..EffectSettings::default()
+            })
+            .unwrap();
+        processor
+            .dispatch_midi(MidiMessage::new(&[0x90, 45, 127]).unwrap())
+            .unwrap();
+        let mut quiet = [0.0; 4_096];
+        let mut talking = [0.5; 4_096];
+        processor
+            .process(&mut [&mut quiet, &mut talking], &[])
+            .unwrap();
+        assert!(quiet.iter().all(|sample| *sample == 0.0));
+        assert!(talking[1_024..].iter().any(|sample| sample.abs() > 0.05));
+    }
+
+    #[test]
     fn invalid_midi_is_rejected_before_audio_or_voice_state_changes() {
         let mut processor = AudioProcessor::<1>::new(48_000.0, 1).unwrap();
         let unsupported = MidiMessage::new(&[0xd0, 0, 0]).unwrap();
@@ -877,6 +1005,10 @@ mod tests {
         assert_eq!(
             processor.set_vocoder_sensitivity(f32::INFINITY),
             Err(ProcessError::InvalidVocoderSensitivity)
+        );
+        assert_eq!(
+            processor.set_noise_gate_threshold_db(-80.1),
+            Err(ProcessError::InvalidNoiseGateThreshold)
         );
         assert_eq!(
             processor.set_compressor_amount(1.1),
@@ -920,6 +1052,8 @@ mod tests {
                 vocoder_enabled: true,
                 vocoder_mix: 0.75,
                 vocoder_sensitivity: 0.625,
+                noise_gate_enabled: true,
+                noise_gate_threshold_db: -42.5,
                 reverb_enabled: true,
                 reverb_amount: 0.375,
                 distortion_enabled: true,
@@ -943,17 +1077,29 @@ mod tests {
         assert_eq!(restored.sample_rate(), 44_100.0);
         assert_eq!(restored.channel_count(), 1);
 
+        // Version 3 states ended after the vocoder controls and supply
+        // bypassed noise-gate defaults.
+        let mut version_three = state.clone();
+        version_three[4..6].copy_from_slice(&3_u16.to_le_bytes());
+        version_three.truncate(version_three.len() - 5);
+        let mut legacy = AudioProcessor::<4, 1>::new(48_000.0, 1).unwrap();
+        legacy.load_state(&version_three).unwrap();
+        let legacy_settings = legacy.effect_settings();
+        assert!(legacy_settings.vocoder_enabled);
+        assert!(!legacy_settings.noise_gate_enabled);
+        assert_eq!(legacy_settings.noise_gate_threshold_db, -50.0);
+
         // Version 2 states ended after the EQ gains and supply bypassed
-        // vocoder defaults.
-        let mut version_two = state.clone();
+        // vocoder and noise-gate defaults.
+        let mut version_two = version_three;
         version_two[4..6].copy_from_slice(&2_u16.to_le_bytes());
         version_two.truncate(version_two.len() - 9);
-        let mut legacy = AudioProcessor::<4, 1>::new(48_000.0, 1).unwrap();
         legacy.load_state(&version_two).unwrap();
         let legacy_settings = legacy.effect_settings();
         assert!(!legacy_settings.vocoder_enabled);
         assert_eq!(legacy_settings.vocoder_mix, 1.0);
         assert_eq!(legacy_settings.vocoder_sensitivity, 0.5);
+        assert!(!legacy_settings.noise_gate_enabled);
         assert!(legacy_settings.compressor_enabled);
         assert!(legacy_settings.eq_enabled);
 
@@ -985,9 +1131,19 @@ mod tests {
         assert_eq!(processor.load_state(&corrupt), Err(StateError::InvalidData));
         assert_eq!(processor.serialize_state(), before);
 
+        let mut invalid_gate = before.clone();
+        let threshold = invalid_gate.len() - size_of::<f32>();
+        invalid_gate[threshold..].copy_from_slice(&f32::NAN.to_le_bytes());
+        assert_eq!(
+            processor.load_state(&invalid_gate),
+            Err(StateError::InvalidConfiguration)
+        );
+        assert_eq!(processor.serialize_state(), before);
+
         let mut invalid_vocoder = before.clone();
-        let sensitivity = invalid_vocoder.len() - size_of::<f32>();
-        invalid_vocoder[sensitivity..].copy_from_slice(&f32::NAN.to_le_bytes());
+        let sensitivity = invalid_vocoder.len() - size_of::<f32>() - 5;
+        invalid_vocoder[sensitivity..sensitivity + size_of::<f32>()]
+            .copy_from_slice(&f32::NAN.to_le_bytes());
         assert_eq!(
             processor.load_state(&invalid_vocoder),
             Err(StateError::InvalidConfiguration)

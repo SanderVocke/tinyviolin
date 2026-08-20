@@ -10,13 +10,21 @@ const VOCODER_FILTER_Q: f32 = 2.0;
 const VOCODER_ATTACK_SECONDS: f32 = 0.005;
 const VOCODER_RELEASE_SECONDS: f32 = 0.05;
 const VOCODER_MAX_SENSITIVITY_GAIN: f32 = 20.0;
+const NOISE_GATE_WINDOW_SECONDS: f32 = 0.01;
+const NOISE_GATE_HYSTERESIS_DB: f32 = 3.0;
+const NOISE_GATE_ATTACK_SECONDS: f32 = 0.005;
+const NOISE_GATE_RELEASE_SECONDS: f32 = 0.05;
+pub(crate) const NOISE_GATE_MIN_THRESHOLD_DB: f32 = -80.0;
+pub(crate) const NOISE_GATE_MAX_THRESHOLD_DB: f32 = 0.0;
+pub(crate) const NOISE_GATE_DEFAULT_THRESHOLD_DB: f32 = -50.0;
 
 /// Settings for the post-processing effects.
 ///
 /// Vocoder mix, vocoder sensitivity, reverb amount, and compressor amount are
-/// normalized values in `0.0..=1.0`. Distortion drive is a linear multiplier
-/// in `1.0..=20.0`. The equalizer's low, mid, and high controls are gains in
-/// decibels in `-12.0..=12.0`. Every effect is bypassed by default.
+/// normalized values in `0.0..=1.0`. The noise-gate threshold is in decibels
+/// in `-80.0..=0.0`. Distortion drive is a linear multiplier in `1.0..=20.0`.
+/// The equalizer's low, mid, and high controls are gains in decibels in
+/// `-12.0..=12.0`. Every effect is bypassed by default.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[allow(clippy::struct_excessive_bools)] // Each independent effect has a public bypass toggle.
 pub struct EffectSettings {
@@ -26,6 +34,10 @@ pub struct EffectSettings {
     pub vocoder_mix: f32,
     /// Vocoder modulator sensitivity in `0.0..=1.0`.
     pub vocoder_sensitivity: f32,
+    /// Enable the input noise gate.
+    pub noise_gate_enabled: bool,
+    /// Noise-gate threshold in decibels in `-80.0..=0.0`.
+    pub noise_gate_threshold_db: f32,
     /// Enable the algorithmic reverb.
     pub reverb_enabled: bool,
     /// Reverb dry/wet amount in `0.0..=1.0`.
@@ -54,6 +66,8 @@ impl Default for EffectSettings {
             vocoder_enabled: false,
             vocoder_mix: 1.0,
             vocoder_sensitivity: 0.5,
+            noise_gate_enabled: false,
+            noise_gate_threshold_db: NOISE_GATE_DEFAULT_THRESHOLD_DB,
             reverb_enabled: false,
             reverb_amount: 0.25,
             distortion_enabled: false,
@@ -97,6 +111,73 @@ impl Vocoder {
             .iter_mut()
             .map(|band| band.process(modulator, carrier, sensitivity_gain))
             .sum()
+    }
+}
+
+pub(crate) struct NoiseGate {
+    squared_window: Box<[f32]>,
+    index: usize,
+    squared_sum: f32,
+    gain: f32,
+    open: bool,
+    attack_step: f32,
+    release_step: f32,
+}
+
+impl NoiseGate {
+    pub(crate) fn new(sample_rate: f32) -> Self {
+        let window_len = delay_samples(sample_rate, NOISE_GATE_WINDOW_SECONDS);
+        Self {
+            squared_window: vec![0.0; window_len].into_boxed_slice(),
+            index: 0,
+            squared_sum: 0.0,
+            gain: 0.0,
+            open: false,
+            attack_step: gain_step(sample_rate, NOISE_GATE_ATTACK_SECONDS),
+            release_step: gain_step(sample_rate, NOISE_GATE_RELEASE_SECONDS),
+        }
+    }
+
+    pub(crate) fn reset(&mut self) {
+        self.squared_window.fill(0.0);
+        self.index = 0;
+        self.squared_sum = 0.0;
+        self.gain = 0.0;
+        self.open = false;
+    }
+
+    pub(crate) fn process(&mut self, input: f32, threshold_db: f32) -> f32 {
+        let tracked = if input.is_finite() {
+            input.clamp(-1.0, 1.0)
+        } else {
+            0.0
+        };
+        let squared = tracked * tracked;
+        self.squared_sum = (self.squared_sum - self.squared_window[self.index] + squared).max(0.0);
+        self.squared_window[self.index] = squared;
+        self.index += 1;
+        if self.index == self.squared_window.len() {
+            self.index = 0;
+        }
+
+        #[allow(clippy::cast_precision_loss)]
+        let rms = (self.squared_sum / self.squared_window.len() as f32).sqrt();
+        let open_threshold = db_to_gain(threshold_db);
+        let close_threshold = open_threshold * db_to_gain(-NOISE_GATE_HYSTERESIS_DB);
+        if self.open {
+            if rms < close_threshold {
+                self.open = false;
+            }
+        } else if rms >= open_threshold {
+            self.open = true;
+        }
+
+        if self.open {
+            self.gain = (self.gain + self.attack_step).min(1.0);
+        } else {
+            self.gain = (self.gain - self.release_step).max(0.0);
+        }
+        suppress_denormal(self.gain)
     }
 }
 
@@ -181,6 +262,7 @@ impl Biquad {
 }
 
 pub(crate) struct ChannelEffects {
+    noise_gate: NoiseGate,
     vocoder: Vocoder,
     equalizer: ThreeBandEq,
     compressor: Compressor,
@@ -190,6 +272,7 @@ pub(crate) struct ChannelEffects {
 impl ChannelEffects {
     pub(crate) fn new(sample_rate: f32) -> Self {
         Self {
+            noise_gate: NoiseGate::new(sample_rate),
             vocoder: Vocoder::new(sample_rate),
             equalizer: ThreeBandEq::new(sample_rate),
             compressor: Compressor::new(sample_rate),
@@ -198,6 +281,7 @@ impl ChannelEffects {
     }
 
     pub(crate) fn reset_dsp(&mut self) {
+        self.noise_gate.reset();
         self.vocoder.reset();
         self.equalizer.reset();
         self.compressor.reset();
@@ -206,6 +290,10 @@ impl ChannelEffects {
 
     pub(crate) fn reset_vocoder(&mut self) {
         self.vocoder.reset();
+    }
+
+    pub(crate) fn reset_noise_gate(&mut self) {
+        self.noise_gate.reset();
     }
 
     pub(crate) fn reset_equalizer(&mut self) {
@@ -226,10 +314,22 @@ impl ChannelEffects {
         carrier: f32,
         settings: EffectSettings,
     ) -> f32 {
-        let dry = modulator + carrier;
+        let gate_gain = if settings.noise_gate_enabled {
+            self.noise_gate
+                .process(modulator, settings.noise_gate_threshold_db)
+        } else {
+            1.0
+        };
+        let gated_modulator = modulator * gate_gain;
+        let gated_carrier = if settings.noise_gate_enabled && settings.vocoder_enabled {
+            carrier * gate_gain
+        } else {
+            carrier
+        };
+        let dry = gated_modulator + gated_carrier;
         let vocoded = if settings.vocoder_enabled {
             self.vocoder
-                .process(modulator, carrier, settings.vocoder_sensitivity)
+                .process(gated_modulator, gated_carrier, settings.vocoder_sensitivity)
         } else {
             dry
         };
@@ -426,6 +526,10 @@ fn envelope_coefficient(sample_rate: f32, seconds: f32) -> f32 {
     1.0 - (-1.0 / (sample_rate * seconds)).exp()
 }
 
+fn gain_step(sample_rate: f32, seconds: f32) -> f32 {
+    (sample_rate * seconds).max(1.0).recip()
+}
+
 fn db_to_gain(db: f32) -> f32 {
     10.0_f32.powf(db / 20.0)
 }
@@ -448,7 +552,7 @@ mod tests {
     #![allow(clippy::float_cmp)] // Exact zero proves that neither raw vocoder source leaks.
     use core::f32::consts::TAU;
 
-    use super::{Biquad, ChannelEffects, EffectSettings, Vocoder};
+    use super::{Biquad, ChannelEffects, EffectSettings, NoiseGate, Vocoder};
 
     fn sine(phase: usize, frequency_hz: f32, sample_rate: f32) -> f32 {
         #[allow(clippy::cast_precision_loss)]
@@ -530,6 +634,51 @@ mod tests {
                 let output = vocoder.process(input, -input, 1.0);
                 assert!(output.is_finite());
             }
+        }
+    }
+
+    #[test]
+    fn noise_gate_tracks_rms_uses_hysteresis_and_reaches_exact_silence() {
+        let mut gate = NoiseGate::new(1_000.0);
+        for _ in 0..10 {
+            let _ = gate.process(0.2, -20.0);
+        }
+        let mut gain = 0.0;
+        for _ in 0..10 {
+            gain = gate.process(0.2, -20.0);
+        }
+        assert_eq!(gain, 1.0);
+
+        // -22 dB remains below the opening threshold but above the fixed
+        // -23 dB closing threshold, so an already-open gate stays open.
+        for _ in 0..100 {
+            gain = gate.process(10.0_f32.powf(-22.0 / 20.0), -20.0);
+        }
+        assert_eq!(gain, 1.0);
+
+        for _ in 0..100 {
+            gain = gate.process(0.0, -20.0);
+        }
+        assert_eq!(gain, 0.0);
+        gate.reset();
+        assert_eq!(gate.process(0.0, -80.0), 0.0);
+    }
+
+    #[test]
+    fn noise_gate_threshold_is_monotonic_and_sample_rate_safe() {
+        let render = |sample_rate: f32, threshold_db: f32| {
+            let mut gate = NoiseGate::new(sample_rate);
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let frames = (sample_rate * 0.1).max(100.0) as usize;
+            (0..frames)
+                .map(|_| gate.process(0.05, threshold_db))
+                .sum::<f32>()
+        };
+        assert!(render(48_000.0, -40.0) > render(48_000.0, -20.0));
+        for sample_rate in [1.0, 8_000.0, 48_000.0, 768_000.0] {
+            let gain = render(sample_rate, -50.0);
+            assert!(gain.is_finite());
+            assert!((0.0..=768_000.0).contains(&gain));
         }
     }
 
