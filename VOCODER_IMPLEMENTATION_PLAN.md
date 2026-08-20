@@ -193,7 +193,7 @@ Depends on all prior stages.
 - [x] Run ShoopDaLoop's mandated formatting, warning-denying build, complete nextest, changed-test-policy, tracing-inventory, WASM build, and browser smoke/test gates from its repository instructions. Record toolchain substitutions separately; do not treat a proxy check as the mandated gate.
 - [x] Audit every acceptance criterion against concrete tests, commands, source paths, and manual/proxy evidence. Separate confirmed behavior from any blocked or approximate evidence and do not declare completion while a criterion lacks defensible evidence.
 - [x] Confirm both repositories contain only intended source, tests, docs, lockfile/dependency updates, and plan progress; remove generated audio/build artifacts.
-- [ ] Commit and push final validation/documentation milestones on both feature branches and open/update the relevant PRs with dependency ordering and verification evidence.
+- [x] Commit and push final validation/documentation milestones on both feature branches and open/update the relevant PRs with dependency ordering and verification evidence (`tinyviolin` PR #6, ShoopDaLoop PR #781).
 
 ## Completion audit and validation evidence
 
