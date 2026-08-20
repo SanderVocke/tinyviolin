@@ -9,6 +9,9 @@ fn prepared_showcase_processing_and_gui_drain_do_not_allocate() {
     let mut processor = ShowcaseProcessor::with_channels(48_000.0, 3).unwrap();
     processor
         .set_effect_settings(EffectSettings {
+            vocoder_enabled: true,
+            vocoder_mix: 0.8,
+            vocoder_sensitivity: 0.6,
             reverb_enabled: true,
             distortion_enabled: true,
             compressor_enabled: true,

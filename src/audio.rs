@@ -15,10 +15,11 @@ const AUDIO_STATE_VERSION: u16 = 3;
 ///
 /// The channel count is selected during construction and may be any nonzero
 /// value. Processing is in-place: each channel initially contains its audio
-/// input. The same synthesized sample is added to every channel, then each
-/// channel is independently passed through distortion, three-band EQ,
-/// compression, and reverb. Construction allocates effect delay storage;
-/// dispatch and processing do not allocate.
+/// input. The same synthesized sample is available to every channel as a dry
+/// source or vocoder carrier. Vocoder/dry mixing precedes distortion,
+/// three-band EQ, compression, and reverb. Construction allocates effect delay
+/// storage and initializes fixed vocoder state; dispatch and processing do not
+/// allocate.
 pub struct AudioProcessor<const VOICES: usize = 32, const MIDI_LAYERS: usize = 2> {
     midi: MidiSynth<VOICES, MIDI_LAYERS>,
     channel_effects: Vec<ChannelEffects>,
@@ -982,6 +983,15 @@ mod tests {
         corrupt.push(0);
 
         assert_eq!(processor.load_state(&corrupt), Err(StateError::InvalidData));
+        assert_eq!(processor.serialize_state(), before);
+
+        let mut invalid_vocoder = before.clone();
+        let sensitivity = invalid_vocoder.len() - size_of::<f32>();
+        invalid_vocoder[sensitivity..].copy_from_slice(&f32::NAN.to_le_bytes());
+        assert_eq!(
+            processor.load_state(&invalid_vocoder),
+            Err(StateError::InvalidConfiguration)
+        );
         assert_eq!(processor.serialize_state(), before);
     }
 

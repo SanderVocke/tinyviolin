@@ -63,6 +63,15 @@ struct ShowcaseParams {
     #[id = "master-gain"]
     master_gain: FloatParam,
 
+    #[id = "vocoder-enabled"]
+    vocoder_enabled: BoolParam,
+
+    #[id = "vocoder-mix"]
+    vocoder_mix: FloatParam,
+
+    #[id = "vocoder-sensitivity"]
+    vocoder_sensitivity: FloatParam,
+
     #[id = "reverb-enabled"]
     reverb_enabled: BoolParam,
 
@@ -112,15 +121,11 @@ impl Default for ShowcaseParams {
             .with_unit(" dB")
             .with_value_to_string(formatters::v2s_f32_gain_to_db(1))
             .with_string_to_value(formatters::s2v_f32_gain_to_db()),
+            vocoder_enabled: BoolParam::new("Vocoder", false),
+            vocoder_mix: normalized_parameter("Vocoder Mix", 1.0),
+            vocoder_sensitivity: normalized_parameter("Vocoder Sensitivity", 0.5),
             reverb_enabled: BoolParam::new("Reverb", false),
-            reverb_amount: FloatParam::new(
-                "Reverb Amount",
-                0.25,
-                FloatRange::Linear { min: 0.0, max: 1.0 },
-            )
-            .with_unit(" %")
-            .with_value_to_string(formatters::v2s_f32_percentage(0))
-            .with_string_to_value(formatters::s2v_f32_percentage()),
+            reverb_amount: normalized_parameter("Reverb Amount", 0.25),
             distortion_enabled: BoolParam::new("Distortion", false),
             distortion_drive: FloatParam::new(
                 "Distortion Drive",
@@ -148,6 +153,13 @@ impl Default for ShowcaseParams {
             eq_high_db: eq_parameter("EQ High"),
         }
     }
+}
+
+fn normalized_parameter(name: &'static str, default: f32) -> FloatParam {
+    FloatParam::new(name, default, FloatRange::Linear { min: 0.0, max: 1.0 })
+        .with_unit(" %")
+        .with_value_to_string(formatters::v2s_f32_percentage(0))
+        .with_string_to_value(formatters::s2v_f32_percentage())
 }
 
 fn eq_parameter(name: &'static str) -> FloatParam {
@@ -245,21 +257,7 @@ impl Plugin for TinyViolinShowcase {
             return process_error(error);
         }
 
-        let settings = tinyviolin::EffectSettings {
-            vocoder_enabled: false,
-            vocoder_mix: 1.0,
-            vocoder_sensitivity: 0.5,
-            reverb_enabled: self.params.reverb_enabled.value(),
-            reverb_amount: self.params.reverb_amount.value(),
-            distortion_enabled: self.params.distortion_enabled.value(),
-            distortion_drive: self.params.distortion_drive.value(),
-            compressor_enabled: self.params.compressor_enabled.value(),
-            compressor_amount: self.params.compressor_amount.value(),
-            eq_enabled: self.params.eq_enabled.value(),
-            eq_low_db: self.params.eq_low_db.value(),
-            eq_mid_db: self.params.eq_mid_db.value(),
-            eq_high_db: self.params.eq_high_db.value(),
-        };
+        let settings = effect_settings(&self.params);
         if let Err(error) = self.processor.set_effect_settings(settings) {
             return process_error(error);
         }
@@ -347,6 +345,24 @@ impl Plugin for TinyViolinShowcase {
     }
 }
 
+fn effect_settings(params: &ShowcaseParams) -> tinyviolin::EffectSettings {
+    tinyviolin::EffectSettings {
+        vocoder_enabled: params.vocoder_enabled.value(),
+        vocoder_mix: params.vocoder_mix.value(),
+        vocoder_sensitivity: params.vocoder_sensitivity.value(),
+        reverb_enabled: params.reverb_enabled.value(),
+        reverb_amount: params.reverb_amount.value(),
+        distortion_enabled: params.distortion_enabled.value(),
+        distortion_drive: params.distortion_drive.value(),
+        compressor_enabled: params.compressor_enabled.value(),
+        compressor_amount: params.compressor_amount.value(),
+        eq_enabled: params.eq_enabled.value(),
+        eq_low_db: params.eq_low_db.value(),
+        eq_mid_db: params.eq_mid_db.value(),
+        eq_high_db: params.eq_high_db.value(),
+    }
+}
+
 fn process_error(_error: tinyviolin::ProcessError) -> ProcessStatus {
     ProcessStatus::Error("tinyviolin rejected a processing event")
 }
@@ -412,6 +428,9 @@ mod tests {
     #[test]
     fn effects_are_bypassed_by_default_with_useful_control_values() {
         let params = ShowcaseParams::default();
+        assert!(!params.vocoder_enabled.value());
+        assert!((params.vocoder_mix.value() - 1.0).abs() < f32::EPSILON);
+        assert!((params.vocoder_sensitivity.value() - 0.5).abs() < f32::EPSILON);
         assert!(!params.reverb_enabled.value());
         assert!((params.reverb_amount.value() - 0.25).abs() < f32::EPSILON);
         assert!(!params.distortion_enabled.value());

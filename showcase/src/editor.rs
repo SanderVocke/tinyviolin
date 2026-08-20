@@ -5,7 +5,7 @@ use crate::keyboard::{
 use crate::{EDITOR_HEIGHT, EDITOR_WIDTH, Preset, ShowcaseParams};
 use egui::{Color32, Rect, Sense, Stroke, StrokeKind, Vec2, pos2};
 use nice_plug::editor::Editor;
-use nice_plug::prelude::Enum;
+use nice_plug::prelude::{Enum, ParamSetter};
 use nice_plug_egui::resizable_window::ResizableWindow;
 use nice_plug_egui::{EguiNiceSettings, create_egui_editor, widgets};
 use std::sync::Arc;
@@ -47,6 +47,7 @@ pub(crate) fn create_editor(
                                 .with_width(180.0),
                         );
                     });
+                    draw_vocoder(ui, setter, &params);
                     ui.horizontal(|ui| {
                         let mut reverb_enabled = params.reverb_enabled.value();
                         if ui.checkbox(&mut reverb_enabled, "Reverb").changed() {
@@ -113,6 +114,27 @@ pub(crate) fn create_editor(
                 });
         },
     )
+}
+
+fn draw_vocoder(ui: &mut egui::Ui, setter: &ParamSetter<'_>, params: &ShowcaseParams) {
+    ui.horizontal(|ui| {
+        let mut enabled = params.vocoder_enabled.value();
+        if ui.checkbox(&mut enabled, "Vocoder").changed() {
+            setter.begin_set_parameter(&params.vocoder_enabled);
+            setter.set_parameter(&params.vocoder_enabled, enabled);
+            setter.end_set_parameter(&params.vocoder_enabled);
+        }
+        ui.label("Mix");
+        ui.add_enabled(
+            enabled,
+            widgets::ParamSlider::for_param(&params.vocoder_mix, setter).with_width(130.0),
+        );
+        ui.label("Sensitivity");
+        ui.add_enabled(
+            enabled,
+            widgets::ParamSlider::for_param(&params.vocoder_sensitivity, setter).with_width(130.0),
+        );
+    });
 }
 
 fn draw_keyboard(ui: &mut egui::Ui, keyboard: &mut EditorKeyboard) {

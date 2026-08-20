@@ -77,13 +77,13 @@ Depends on Stage 1.
 
 Depends on Stage 2.
 
-- [ ] Bump the audio-state format, serialize vocoder controls, load current state transactionally, and provide bypassed defaults when reading supported older versions.
-- [ ] Extend state tests for round-trip, malformed/out-of-range values, unchanged-on-error behavior, and all supported legacy versions.
-- [ ] Document vocoder terminology, carrier requirements, controls, signal order, full-wet behavior, multichannel behavior, and realtime guarantees in `README.md` and public API docs.
-- [ ] Add showcase host parameters and egui controls using the stable vocoder IDs; propagate settings into `ShowcaseProcessor` and include the vocoder in showcase allocation/default/UI tests.
-- [ ] Update plugin feature metadata only if the host API has an appropriate vocoder category; do not substitute an inaccurate category.
-- [ ] Run all `tinyviolin` workspace tests, docs, formatting, clippy, all-feature showcase checks, and dry-run packaging.
-- [ ] Commit the state/documentation/showcase milestone.
+- [x] Bump the audio-state format, serialize vocoder controls, load current state transactionally, and provide bypassed defaults when reading supported older versions.
+- [x] Extend state tests for round-trip, malformed/out-of-range values, unchanged-on-error behavior, and all supported legacy versions.
+- [x] Document vocoder terminology, carrier requirements, controls, signal order, full-wet behavior, multichannel behavior, and realtime guarantees in `README.md` and public API docs.
+- [x] Add showcase host parameters and egui controls using the stable vocoder IDs; propagate settings into `ShowcaseProcessor` and include the vocoder in showcase allocation/default/UI tests.
+- [x] Update plugin feature metadata only if the host API has an appropriate vocoder category; do not substitute an inaccurate category.
+- [x] Run all `tinyviolin` workspace tests, docs, formatting, clippy, all-feature showcase checks, and dry-run packaging.
+- [x] Commit the state/documentation/showcase milestone.
 
 ### Stage 4 — Extend ShoopDaLoop's engine control and MIDI model
 

@@ -1,6 +1,6 @@
 # tinyviolin
 
-`tinyviolin` is a small dependency-free Rust library for generated instrument sounds and in-place multichannel audio processing. It is intended as a minimal demonstrator for integrating MIDI, synthesis, audio input mixing, and simple post-processing effects into music production software.
+`tinyviolin` is a small dependency-free Rust library for generated instrument sounds and in-place multichannel audio processing. It is intended as a minimal demonstrator for integrating MIDI, synthesis, audio-input vocoding and mixing, and simple post-processing effects into music production software.
 
 ## Installation
 
@@ -78,13 +78,16 @@ assert_eq!(synth.active_voice_count(), 0);
 
 ## Multichannel input and effects
 
-`AudioProcessor` configures any nonzero number of channels during setup. Processing is in-place: every channel slice initially contains that channel's audio input. The processor adds the same synthesized sample to every channel, then independently applies distortion, three-band EQ, compression, and reverb to each input+synth mix.
+`AudioProcessor` configures any nonzero number of channels during setup. Processing is in-place: every channel slice initially contains that channel's audio input. With the vocoder bypassed, the processor adds the same synthesized sample to every channel. With the vocoder enabled, each input channel independently modulates the shared mono synth carrier through a 16-band filter bank. The selected dry/vocoded signal then independently passes through distortion, three-band EQ, compression, and reverb.
 
 ```rust
 use tinyviolin::{AudioProcessor, EffectSettings};
 
 let mut processor = AudioProcessor::<32>::new(48_000.0, 2)?;
 processor.set_effect_settings(EffectSettings {
+    vocoder_enabled: true,
+    vocoder_mix: 0.8,
+    vocoder_sensitivity: 0.6,
     reverb_enabled: true,
     reverb_amount: 0.3,
     distortion_enabled: true,
@@ -103,11 +106,13 @@ processor.process(&mut [&mut left, &mut right], &[])?;
 # Ok::<(), tinyviolin::ProcessError>(())
 ```
 
-Reverb has one dry/wet amount control in `0.0..=1.0`, and distortion has one linear drive control in `1.0..=20.0`. The one-knob compressor's amount in `0.0..=1.0` jointly lowers its threshold and raises its ratio. The three-band EQ provides low, mid, and high gains in `-12..=12` dB, with crossovers at approximately 250 Hz and 4 kHz. Each effect has an independent bypass toggle and all effects are bypassed by default. Use `set_effect_settings` to replace all controls together; dedicated setters are also available for every toggle and control.
+The vocoder has normalized dry/wet mix and modulator sensitivity controls. At full wet, neither raw input nor raw carrier is present; both a modulator and a playing synth voice are required. Harmonically rich carriers such as `Square`, `Lead`, and `Pad` are more intelligible than `Sine`. Its 16 fixed bands cover the useful speech range up to approximately 8 kHz with time-domain envelope following and no block latency. Each channel has independent analysis state.
+
+Reverb has one dry/wet amount control in `0.0..=1.0`, and distortion has one linear drive control in `1.0..=20.0`. The one-knob compressor's amount in `0.0..=1.0` jointly lowers its threshold and raises its ratio. The three-band EQ provides low, mid, and high gains in `-12..=12` dB, with crossovers at approximately 250 Hz and 4 kHz. Each effect has an independent bypass toggle and all effects, including the vocoder, are bypassed by default. Use `set_effect_settings` to replace all controls together; dedicated setters are also available for every toggle and control.
 
 `AudioProcessor::process` accepts sample-timed synthesis events for a complete block. `AudioProcessor::render_range` and `AudioProcessor::dispatch` support hosts that deliver events incrementally while traversing a block. Channel count, channel lengths, frame ranges, event timing, and effect values are validated before processing.
 
-`AudioProcessor<VOICES, MIDI_LAYERS>` also has fixed-storage MIDI mappings and accepts MIDI directly. Configure mappings with `set_midi_layer` or `set_midi_channel_layer`, use `dispatch_midi` for an immediate `MidiMessage`, and use `process_midi` for sample-timed `TimedMidiMessage`s. MIDI-triggered voices follow the same input+synth mixing and effects path as direct `Event`s. `AudioMidiError` distinguishes audio-block errors from MIDI message or timing errors.
+`AudioProcessor<VOICES, MIDI_LAYERS>` also has fixed-storage MIDI mappings and accepts MIDI directly. Configure mappings with `set_midi_layer` or `set_midi_channel_layer`, use `dispatch_midi` for an immediate `MidiMessage`, and use `process_midi` for sample-timed `TimedMidiMessage`s. MIDI-triggered voices follow the same input/carrier and effects path as direct `Event`s. `AudioMidiError` distinguishes audio-block errors from MIDI message or timing errors.
 
 ## MIDI control
 
@@ -151,7 +156,7 @@ The `percussion-kit` preset puts bass drums on General MIDI keys 35/36, snares o
 
 ## Panic and session state
 
-`Synth`, `MidiSynth`, and `AudioProcessor` provide `reset_dsp()` and its host-oriented `panic()` alias. A reset immediately clears voices and oscillator state. MIDI-capable processors also center pitch bend and turn modulation off, while `AudioProcessor` additionally clears every effect tail. Sample rate, channel layout, MIDI mappings, selected preset, and effect settings are preserved.
+`Synth`, `MidiSynth`, and `AudioProcessor` provide `reset_dsp()` and its host-oriented `panic()` alias. A reset immediately clears voices and oscillator state. MIDI-capable processors also center pitch bend and turn modulation off, while `AudioProcessor` additionally clears vocoder analysis/envelopes and every effect tail. Sample rate, channel layout, MIDI mappings, selected preset, and effect settings are preserved.
 
 `MidiSynth::serialize_state` saves its mappings and selected preset. `AudioProcessor::serialize_state` additionally saves effect settings. The corresponding `load_state` methods validate the complete versioned binary payload before replacing configuration; malformed or capacity-incompatible state returns `StateError` and leaves configuration unchanged. DSP state, sample rate, and channel count are deliberately not serialized. Loading state does not panic the current DSP state, so a host can call `reset_dsp()` separately when desired.
 
@@ -170,7 +175,7 @@ restored.load_state(&session_bytes)?;
 
 ## Real-time use and capacities
 
-- Construct `Synth`, `MidiSynth`, or `AudioProcessor`, configure mappings, select presets, serialize/load session state, and prepare event storage outside the audio callback. `AudioProcessor` construction allocates fixed-per-stream reverb delay storage for each channel.
+- Construct `Synth`, `MidiSynth`, or `AudioProcessor`, configure mappings, select presets, serialize/load session state, and prepare event storage outside the audio callback. `AudioProcessor` construction allocates fixed-per-stream reverb delay storage and initializes fixed vocoder state for each channel.
 - Dispatch and processing methods perform no allocation, locking, I/O, or logging.
 - `Synth<VOICES>` caps simultaneous layers. When full, allocation uses an empty voice first, then the oldest released voice, then the oldest active voice.
 - `MidiSynth<VOICES, LAYERS>` additionally fixes layers per channel/note. Its direct lookup table trades a bounded amount of memory for constant-time lookup.
@@ -188,9 +193,9 @@ This writes `rendered/tinyviolin_presets.wav`, with one labeled-in-source sectio
 
 ## Plugin and standalone showcase
 
-The `tinyviolin-showcase` workspace package wraps the library as a CLAP/VST3 instrument/effect and as a native nice-plug application. It exposes matched audio input/output layouts from mono through 63 channels, the maximum channel count representable by the VST3 layout wrapper. Synthesized sound is sent equally to every output channel, mixed with that channel's input, processed by distortion, three-band EQ, compression, and reverb, and then scaled by master gain.
+The `tinyviolin-showcase` workspace package wraps the library as a CLAP/VST3 instrument/effect and as a native nice-plug application. It exposes matched audio input/output layouts from mono through 63 channels, the maximum channel count representable by the VST3 layout wrapper. Synthesized sound is sent equally to every output channel and can act as the carrier for that channel's input before vocoder/dry mixing, distortion, three-band EQ, compression, reverb, and master gain.
 
-The egui editor provides all twelve presets, smoothed master gain, reverb, distortion, one-knob compressor, three-band EQ, and a clickable two-octave piano. The same controls are exposed to plugin hosts with parameter IDs `preset`, `master-gain`, `reverb-enabled`, `reverb-amount`, `distortion-enabled`, `distortion-drive`, `compressor-enabled`, `compressor-amount`, `eq-enabled`, `eq-low`, `eq-mid`, and `eq-high`. The core `tinyviolin` package remains the workspace's dependency-free default member.
+The egui editor provides all twelve presets, smoothed master gain, vocoder, reverb, distortion, one-knob compressor, three-band EQ, and a clickable two-octave piano. The same controls are exposed to plugin hosts with parameter IDs `preset`, `master-gain`, `vocoder-enabled`, `vocoder-mix`, `vocoder-sensitivity`, `reverb-enabled`, `reverb-amount`, `distortion-enabled`, `distortion-drive`, `compressor-enabled`, `compressor-amount`, `eq-enabled`, `eq-low`, `eq-mid`, and `eq-high`. The core `tinyviolin` package remains the workspace's dependency-free default member.
 
 Install the nice-plug bundler and build all release artifacts with:
 
@@ -220,7 +225,7 @@ sudo apt-get install pkg-config libasound2-dev libgl-dev libjack-jackd2-dev \
   libxcursor-dev libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev
 ```
 
-The showcase supports note-on, note-off, choke, channel pitch bend with a fixed ±2-semitone range, and modulation wheel (CC1) as 5.5 Hz vibrato up to ±0.5 semitone. It does not support MPE, aftertouch, sustain, or other general MIDI CC automation. Host notes are identified by channel and note, so overlapping instances of the same key retrigger one logical voice. Bass drum, tom, snare, and hi-hat use fixed pitches of 60, 130, 180, and 6000 Hz respectively; melodic presets use equal-tempered MIDI pitch. Preset changes apply to new notes, while effects and master gain affect the complete input+synth mix. On Windows, Cargo currently emits a harmless PDB filename-collision warning when building the same package's library and standalone binary together; the resulting executable and plugin bundles are distinct and usable.
+The showcase supports note-on, note-off, choke, channel pitch bend with a fixed ±2-semitone range, and modulation wheel (CC1) as 5.5 Hz vibrato up to ±0.5 semitone. It does not support MPE, aftertouch, sustain, or other general MIDI CC automation. Host notes are identified by channel and note, so overlapping instances of the same key retrigger one logical voice. Bass drum, tom, snare, and hi-hat use fixed pitches of 60, 130, 180, and 6000 Hz respectively; melodic presets use equal-tempered MIDI pitch. Preset changes apply to new notes, while vocoder and post-effect controls affect the current input/carrier signal path. On Windows, Cargo currently emits a harmless PDB filename-collision warning when building the same package's library and standalone binary together; the resulting executable and plugin bundles are distinct and usable.
 
 ## Development
 
