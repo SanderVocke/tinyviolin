@@ -50,26 +50,29 @@ impl Preset {
 
     #[must_use]
     pub const fn instrument(self, midi_note: u8) -> Instrument {
+        self.core().instrument(midi_note)
+    }
+
+    const fn core(self) -> tinyviolin::Preset {
         match self {
-            Self::Sine => Instrument::Sine,
-            Self::Square => Instrument::Square,
-            Self::Triangle => Instrument::Triangle,
-            Self::Pluck => Instrument::Pluck,
-            Self::Bass => Instrument::Bass,
-            Self::Pad => Instrument::Pad,
-            Self::Lead => Instrument::Lead,
-            Self::BassDrum => Instrument::BassDrum,
-            Self::Tom => Instrument::Tom,
-            Self::Snare => Instrument::Snare,
-            Self::HiHat => Instrument::HiHat,
-            Self::PercussionKit => tinyviolin::Preset::PercussionKit.instrument(midi_note),
+            Self::Sine => tinyviolin::Preset::Sine,
+            Self::Square => tinyviolin::Preset::Square,
+            Self::Triangle => tinyviolin::Preset::Triangle,
+            Self::Pluck => tinyviolin::Preset::Pluck,
+            Self::Bass => tinyviolin::Preset::Bass,
+            Self::Pad => tinyviolin::Preset::Pad,
+            Self::Lead => tinyviolin::Preset::Lead,
+            Self::BassDrum => tinyviolin::Preset::BassDrum,
+            Self::Tom => tinyviolin::Preset::Tom,
+            Self::Snare => tinyviolin::Preset::Snare,
+            Self::HiHat => tinyviolin::Preset::HiHat,
+            Self::PercussionKit => tinyviolin::Preset::PercussionKit,
         }
     }
 
     #[must_use]
     pub fn frequency_hz(self, midi_note: u8) -> f32 {
-        tinyviolin::Preset::from_id(self.id())
-            .map_or(440.0, |preset| preset.frequency_hz(midi_note))
+        self.core().frequency_hz(midi_note)
     }
 }
 
