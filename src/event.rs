@@ -89,6 +89,8 @@ pub enum ProcessError {
     InvalidCompressorAmount,
     /// An equalizer band gain was non-finite or outside `-12.0..=12.0` dB.
     InvalidEqGain,
+    /// A noise gate threshold was non-finite or outside `-80.0..=0.0` dB.
+    InvalidNoiseGateThreshold,
     /// A note frequency was not positive and finite.
     InvalidFrequency,
     /// A gain was non-finite or outside `0.0..=1.0`.
@@ -117,6 +119,9 @@ impl core::fmt::Display for ProcessError {
             Self::InvalidDistortionDrive => "distortion drive must be finite and in 1..=20",
             Self::InvalidCompressorAmount => "compressor amount must be finite and in 0..=1",
             Self::InvalidEqGain => "equalizer gains must be finite and in -12..=12 dB",
+            Self::InvalidNoiseGateThreshold => {
+                "noise gate threshold must be finite and in -80..=0 dB"
+            }
             Self::InvalidFrequency => "frequency must be positive and finite",
             Self::InvalidGain => "gain must be finite and in 0..=1",
             Self::InvalidPitchBend => "pitch bend must be finite and in -128..=128 semitones",
