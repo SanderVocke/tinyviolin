@@ -234,7 +234,7 @@ impl<const VOICES: usize, const LAYERS: usize> MidiSynth<VOICES, LAYERS> {
                     pitch: if preset.uses_midi_pitch() {
                         MidiPitch::Note
                     } else {
-                        MidiPitch::Fixed(percussion_frequency(instrument))
+                        MidiPitch::Fixed(preset.frequency_hz(note))
                     },
                     gain: instrument.default_gain(),
                 });
@@ -653,16 +653,6 @@ fn validate_layer(layer: MidiLayer) -> Result<(), MidiError> {
     Ok(())
 }
 
-fn percussion_frequency(instrument: Instrument) -> f32 {
-    match instrument {
-        Instrument::BassDrum => 60.0,
-        Instrument::Tom => 130.0,
-        Instrument::Snare => 180.0,
-        Instrument::HiHat => 6_000.0,
-        _ => 440.0,
-    }
-}
-
 const fn instrument_code(instrument: Instrument) -> u8 {
     match instrument {
         Instrument::Sine => 0,
@@ -829,7 +819,13 @@ mod tests {
         assert_eq!(channel[49].layers[0].unwrap().instrument, Instrument::Tom);
         assert_eq!(
             channel[42].layers[0].unwrap().pitch,
-            MidiPitch::Fixed(6_000.0)
+            MidiPitch::Fixed(7_000.0)
+        );
+        assert_eq!(channel[41].layers[0].unwrap().pitch, MidiPitch::Fixed(80.0));
+        assert_eq!(channel[43].layers[0].unwrap().pitch, MidiPitch::Fixed(95.0));
+        assert_eq!(
+            channel[50].layers[0].unwrap().pitch,
+            MidiPitch::Fixed(180.0)
         );
     }
 }
