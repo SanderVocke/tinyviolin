@@ -134,6 +134,46 @@ impl Preset {
                 | Self::Lead
         )
     }
+
+    /// Return the base frequency used by this preset for a MIDI note.
+    #[must_use]
+    pub fn frequency_hz(self, midi_note: u8) -> f32 {
+        match self {
+            Self::BassDrum => scaled_percussion_frequency(midi_note, 60.0, 35.0, 120.0),
+            Self::Tom => scaled_percussion_frequency(midi_note, 130.0, 65.0, 320.0),
+            Self::Snare => scaled_percussion_frequency(midi_note, 180.0, 100.0, 420.0),
+            Self::HiHat => scaled_percussion_frequency(midi_note, 6_000.0, 3_000.0, 12_000.0),
+            Self::PercussionKit => percussion_frequency(midi_note),
+            _ => midi_frequency(midi_note),
+        }
+    }
+}
+
+fn midi_frequency(note: u8) -> f32 {
+    440.0 * 2.0_f32.powf((f32::from(note) - 69.0) / 12.0)
+}
+
+// Percussion spans two octaves over the full keyboard, centered on middle C,
+// then clamps to an instrument-appropriate range.
+fn scaled_percussion_frequency(note: u8, center: f32, minimum: f32, maximum: f32) -> f32 {
+    (center * 2.0_f32.powf((f32::from(note) - 60.0) / 64.0)).clamp(minimum, maximum)
+}
+
+const fn percussion_frequency(note: u8) -> f32 {
+    match note {
+        0..=35 => 50.0,
+        36..=37 => 60.0,
+        38..=39 | 50..=u8::MAX => 180.0,
+        40 => 220.0,
+        41 => 80.0,
+        42 => 7_000.0,
+        43 => 95.0,
+        44 => 5_000.0,
+        45 => 110.0,
+        46 => 9_000.0,
+        47 => 130.0,
+        48..=49 => 150.0,
+    }
 }
 
 // General MIDI assigns bass drums to 35/36, snares to 38/40, toms to
@@ -150,6 +190,8 @@ const fn percussion_instrument(note: u8) -> Instrument {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::float_cmp)] // Fixed kit frequencies should be exact.
+
     use super::Preset;
     use crate::Instrument;
 
@@ -186,5 +228,30 @@ mod tests {
         assert_eq!(kit.instrument(46), Instrument::HiHat);
         assert_eq!(kit.instrument(50), Instrument::Tom);
         assert_eq!(kit.instrument(127), Instrument::Tom);
+        assert_eq!(kit.frequency_hz(35), 50.0);
+        assert_eq!(kit.frequency_hz(36), 60.0);
+        assert_eq!(kit.frequency_hz(38), 180.0);
+        assert_eq!(kit.frequency_hz(40), 220.0);
+        assert_eq!(kit.frequency_hz(41), 80.0);
+        assert_eq!(kit.frequency_hz(43), 95.0);
+        assert_eq!(kit.frequency_hz(45), 110.0);
+        assert_eq!(kit.frequency_hz(47), 130.0);
+        assert_eq!(kit.frequency_hz(48), 150.0);
+        assert_eq!(kit.frequency_hz(50), 180.0);
+    }
+
+    #[test]
+    fn single_percussion_presets_track_notes_in_sensible_ranges() {
+        for (preset, minimum, maximum) in [
+            (Preset::BassDrum, 35.0, 120.0),
+            (Preset::Tom, 65.0, 320.0),
+            (Preset::Snare, 100.0, 420.0),
+            (Preset::HiHat, 3_000.0, 12_000.0),
+        ] {
+            assert!(preset.frequency_hz(0) >= minimum);
+            assert!(preset.frequency_hz(127) <= maximum);
+            assert!(preset.frequency_hz(48) < preset.frequency_hz(60));
+            assert!(preset.frequency_hz(60) < preset.frequency_hz(72));
+        }
     }
 }
