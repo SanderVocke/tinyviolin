@@ -7,10 +7,15 @@ use core::f32::consts::TAU;
 /// Reverb and compressor amounts are normalized values in `0.0..=1.0`.
 /// Distortion drive is a linear multiplier in `1.0..=20.0`. The equalizer's
 /// low, mid, and high controls are gains in decibels in `-12.0..=12.0`. Every
-/// effect is bypassed by default.
+/// effect is bypassed by default. The noise gate threshold is in decibels in
+/// `-80.0..=0.0`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[allow(clippy::struct_excessive_bools)] // Each independent effect has a public bypass toggle.
 pub struct EffectSettings {
+    /// Enable the noise gate.
+    pub noise_gate_enabled: bool,
+    /// Noise gate threshold in decibels in `-80.0..=0.0`.
+    pub noise_gate_threshold_db: f32,
     /// Enable the algorithmic reverb.
     pub reverb_enabled: bool,
     /// Reverb dry/wet amount in `0.0..=1.0`.
@@ -36,6 +41,8 @@ pub struct EffectSettings {
 impl Default for EffectSettings {
     fn default() -> Self {
         Self {
+            noise_gate_enabled: false,
+            noise_gate_threshold_db: -50.0,
             reverb_enabled: false,
             reverb_amount: 0.25,
             distortion_enabled: false,
@@ -51,6 +58,7 @@ impl Default for EffectSettings {
 }
 
 pub(crate) struct ChannelEffects {
+    noise_gate: NoiseGate,
     equalizer: ThreeBandEq,
     compressor: Compressor,
     reverb: Reverb,
@@ -59,6 +67,7 @@ pub(crate) struct ChannelEffects {
 impl ChannelEffects {
     pub(crate) fn new(sample_rate: f32) -> Self {
         Self {
+            noise_gate: NoiseGate::new(sample_rate),
             equalizer: ThreeBandEq::new(sample_rate),
             compressor: Compressor::new(sample_rate),
             reverb: Reverb::new(sample_rate),
@@ -66,9 +75,14 @@ impl ChannelEffects {
     }
 
     pub(crate) fn reset_dsp(&mut self) {
+        self.noise_gate.reset();
         self.equalizer.reset();
         self.compressor.reset();
         self.reverb.reset();
+    }
+
+    pub(crate) fn reset_noise_gate(&mut self) {
+        self.noise_gate.reset();
     }
 
     pub(crate) fn reset_equalizer(&mut self) {
@@ -84,10 +98,16 @@ impl ChannelEffects {
     }
 
     pub(crate) fn process(&mut self, input: f32, settings: EffectSettings) -> f32 {
-        let distorted = if settings.distortion_enabled {
-            distort(input, settings.distortion_drive)
+        let gated = if settings.noise_gate_enabled {
+            self.noise_gate
+                .process(input, settings.noise_gate_threshold_db)
         } else {
             input
+        };
+        let distorted = if settings.distortion_enabled {
+            distort(gated, settings.distortion_drive)
+        } else {
+            gated
         };
         let equalized = if settings.eq_enabled {
             self.equalizer.process(
@@ -111,6 +131,54 @@ impl ChannelEffects {
             compressed
         };
         output.clamp(-1.0, 1.0)
+    }
+}
+
+/// A peak-operated gate with fixed musical timing: a fast 2 ms opening avoids
+/// dulling transients, a 50 ms hold prevents chatter, and a 100 ms closing ramp
+/// preserves natural note and room-noise decays.
+struct NoiseGate {
+    gain: f32,
+    hold_samples: usize,
+    hold_remaining: usize,
+    attack_coefficient: f32,
+    release_coefficient: f32,
+}
+
+impl NoiseGate {
+    fn new(sample_rate: f32) -> Self {
+        Self {
+            gain: 0.0,
+            hold_samples: delay_samples(sample_rate, 0.05),
+            hold_remaining: 0,
+            attack_coefficient: envelope_coefficient(sample_rate, 0.002),
+            release_coefficient: envelope_coefficient(sample_rate, 0.1),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.gain = 0.0;
+        self.hold_remaining = 0;
+    }
+
+    fn process(&mut self, input: f32, threshold_db: f32) -> f32 {
+        let open = input.abs() >= db_to_gain(threshold_db);
+        let target = if open {
+            self.hold_remaining = self.hold_samples;
+            1.0
+        } else if self.hold_remaining > 0 {
+            self.hold_remaining -= 1;
+            1.0
+        } else {
+            0.0
+        };
+        let coefficient = if target > self.gain {
+            self.attack_coefficient
+        } else {
+            self.release_coefficient
+        };
+        self.gain += coefficient * (target - self.gain);
+        input * self.gain
     }
 }
 
@@ -325,6 +393,32 @@ mod tests {
         }
         assert!(output > 0.0);
         assert!(output < 0.3);
+    }
+
+    #[test]
+    fn noise_gate_opens_quickly_holds_and_closes_smoothly() {
+        let mut effects = ChannelEffects::new(1_000.0);
+        let settings = EffectSettings {
+            noise_gate_enabled: true,
+            noise_gate_threshold_db: -20.0,
+            ..EffectSettings::default()
+        };
+
+        for _ in 0..10 {
+            assert!(effects.process(0.01, settings).abs() < f32::EPSILON);
+        }
+        let opened = effects.process(0.5, settings);
+        assert!(opened > 0.0 && opened < 0.5);
+        for _ in 0..50 {
+            let _ = effects.process(0.05, settings);
+        }
+        let held = effects.process(0.05, settings);
+        assert!(held > 0.04);
+        let mut closing = held;
+        for _ in 0..500 {
+            closing = effects.process(0.05, settings);
+        }
+        assert!(closing < 0.001);
     }
 
     #[test]

@@ -78,13 +78,15 @@ assert_eq!(synth.active_voice_count(), 0);
 
 ## Multichannel input and effects
 
-`AudioProcessor` configures any nonzero number of channels during setup. Processing is in-place: every channel slice initially contains that channel's audio input. The processor adds the same synthesized sample to every channel, then independently applies distortion, three-band EQ, compression, and reverb to each input+synth mix.
+`AudioProcessor` configures any nonzero number of channels during setup. Processing is in-place: every channel slice initially contains that channel's audio input. The processor adds the same synthesized sample to every channel, then independently applies a noise gate, distortion, three-band EQ, compression, and reverb to each input+synth mix.
 
 ```rust
 use tinyviolin::{AudioProcessor, EffectSettings};
 
 let mut processor = AudioProcessor::<32>::new(48_000.0, 2)?;
 processor.set_effect_settings(EffectSettings {
+    noise_gate_enabled: true,
+    noise_gate_threshold_db: -50.0,
     reverb_enabled: true,
     reverb_amount: 0.3,
     distortion_enabled: true,
@@ -103,7 +105,7 @@ processor.process(&mut [&mut left, &mut right], &[])?;
 # Ok::<(), tinyviolin::ProcessError>(())
 ```
 
-Reverb has one dry/wet amount control in `0.0..=1.0`, and distortion has one linear drive control in `1.0..=20.0`. The one-knob compressor's amount in `0.0..=1.0` jointly lowers its threshold and raises its ratio. The three-band EQ provides low, mid, and high gains in `-12..=12` dB, with crossovers at approximately 250 Hz and 4 kHz. Each effect has an independent bypass toggle and all effects are bypassed by default. Use `set_effect_settings` to replace all controls together; dedicated setters are also available for every toggle and control.
+The noise gate exposes only a threshold control in `-80..=0` dB; its fixed 2 ms attack, 50 ms hold, and 100 ms release preserve musical transients and decays while avoiding chatter. Reverb has one dry/wet amount control in `0.0..=1.0`, and distortion has one linear drive control in `1.0..=20.0`. The one-knob compressor's amount in `0.0..=1.0` jointly lowers its threshold and raises its ratio. The three-band EQ provides low, mid, and high gains in `-12..=12` dB, with crossovers at approximately 250 Hz and 4 kHz. Each effect has an independent bypass toggle and all effects are bypassed by default. Use `set_effect_settings` to replace all controls together; dedicated setters are also available for every toggle and control.
 
 `AudioProcessor::process` accepts sample-timed synthesis events for a complete block. `AudioProcessor::render_range` and `AudioProcessor::dispatch` support hosts that deliver events incrementally while traversing a block. Channel count, channel lengths, frame ranges, event timing, and effect values are validated before processing.
 
@@ -188,9 +190,9 @@ This writes `rendered/tinyviolin_presets.wav`, with one labeled-in-source sectio
 
 ## Plugin and standalone showcase
 
-The `tinyviolin-showcase` workspace package wraps the library as a CLAP/VST3 instrument/effect and as a native nice-plug application. It exposes matched audio input/output layouts from mono through 63 channels, the maximum channel count representable by the VST3 layout wrapper. Synthesized sound is sent equally to every output channel, mixed with that channel's input, processed by distortion, three-band EQ, compression, and reverb, and then scaled by master gain.
+The `tinyviolin-showcase` workspace package wraps the library as a CLAP/VST3 instrument/effect and as a native nice-plug application. It exposes matched audio input/output layouts from mono through 63 channels, the maximum channel count representable by the VST3 layout wrapper. Synthesized sound is sent equally to every output channel, mixed with that channel's input, processed by a noise gate, distortion, three-band EQ, compression, and reverb, and then scaled by master gain.
 
-The egui editor provides all twelve presets, smoothed master gain, reverb, distortion, one-knob compressor, three-band EQ, and a clickable two-octave piano. The same controls are exposed to plugin hosts with parameter IDs `preset`, `master-gain`, `reverb-enabled`, `reverb-amount`, `distortion-enabled`, `distortion-drive`, `compressor-enabled`, `compressor-amount`, `eq-enabled`, `eq-low`, `eq-mid`, and `eq-high`. The core `tinyviolin` package remains the workspace's dependency-free default member.
+The egui editor provides all twelve presets, smoothed master gain, a threshold-only noise gate, reverb, distortion, one-knob compressor, three-band EQ, and a clickable two-octave piano. The same controls are exposed to plugin hosts with parameter IDs `preset`, `master-gain`, `noise-gate-enabled`, `noise-gate-threshold`, `reverb-enabled`, `reverb-amount`, `distortion-enabled`, `distortion-drive`, `compressor-enabled`, `compressor-amount`, `eq-enabled`, `eq-low`, `eq-mid`, and `eq-high`. The core `tinyviolin` package remains the workspace's dependency-free default member.
 
 Install the nice-plug bundler and build all release artifacts with:
 

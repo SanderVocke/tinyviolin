@@ -9,14 +9,14 @@ use crate::state::{Reader, push_f32, push_u16, push_u32};
 use crate::{EffectSettings, Event, Preset, ProcessError, StateError, Synth, TimedEvent};
 
 const AUDIO_STATE_MAGIC: &[u8; 4] = b"TVAS";
-const AUDIO_STATE_VERSION: u16 = 2;
+const AUDIO_STATE_VERSION: u16 = 3;
 
 /// A polyphonic synthesizer, per-channel input mixer, and post-effects chain.
 ///
 /// The channel count is selected during construction and may be any nonzero
 /// value. Processing is in-place: each channel initially contains its audio
 /// input. The same synthesized sample is added to every channel, then each
-/// channel is independently passed through distortion, three-band EQ,
+/// channel is independently passed through a noise gate, distortion, three-band EQ,
 /// compression, and reverb. Construction allocates effect delay storage;
 /// dispatch and processing do not allocate.
 pub struct AudioProcessor<const VOICES: usize = 32, const MIDI_LAYERS: usize = 2> {
@@ -111,6 +111,9 @@ impl<const VOICES: usize, const MIDI_LAYERS: usize> AudioProcessor<VOICES, MIDI_
     pub fn set_effect_settings(&mut self, settings: EffectSettings) -> Result<(), ProcessError> {
         validate_effect_settings(settings)?;
         for effects in &mut self.channel_effects {
+            if settings.noise_gate_enabled != self.settings.noise_gate_enabled {
+                effects.reset_noise_gate();
+            }
             if settings.reverb_enabled != self.settings.reverb_enabled {
                 effects.reset_reverb();
             }
@@ -122,6 +125,28 @@ impl<const VOICES: usize, const MIDI_LAYERS: usize> AudioProcessor<VOICES, MIDI_
             }
         }
         self.settings = settings;
+        Ok(())
+    }
+
+    /// Enable or bypass the noise gate.
+    pub fn set_noise_gate_enabled(&mut self, enabled: bool) {
+        if enabled != self.settings.noise_gate_enabled {
+            for effects in &mut self.channel_effects {
+                effects.reset_noise_gate();
+            }
+            self.settings.noise_gate_enabled = enabled;
+        }
+    }
+
+    /// Set the noise gate threshold in decibels in `-80.0..=0.0`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessError::InvalidNoiseGateThreshold`] for an out-of-range
+    /// or non-finite value.
+    pub fn set_noise_gate_threshold_db(&mut self, threshold_db: f32) -> Result<(), ProcessError> {
+        validate_noise_gate_threshold(threshold_db)?;
+        self.settings.noise_gate_threshold_db = threshold_db;
         Ok(())
     }
 
@@ -388,6 +413,8 @@ impl<const VOICES: usize, const MIDI_LAYERS: usize> AudioProcessor<VOICES, MIDI_
             u32::try_from(midi_state.len()).unwrap_or(u32::MAX),
         );
         output.extend_from_slice(&midi_state);
+        output.push(u8::from(self.settings.noise_gate_enabled));
+        push_f32(&mut output, self.settings.noise_gate_threshold_db);
         output.push(u8::from(self.settings.reverb_enabled));
         push_f32(&mut output, self.settings.reverb_amount);
         output.push(u8::from(self.settings.distortion_enabled));
@@ -417,17 +444,22 @@ impl<const VOICES: usize, const MIDI_LAYERS: usize> AudioProcessor<VOICES, MIDI_
             return Err(StateError::InvalidData);
         }
         let version = reader.u16()?;
-        if !matches!(version, 1 | AUDIO_STATE_VERSION) {
+        if !matches!(version, 1 | 2 | AUDIO_STATE_VERSION) {
             return Err(StateError::UnsupportedVersion);
         }
         let midi_len = usize::try_from(reader.u32()?).map_err(|_| StateError::InvalidData)?;
         let midi_state = reader.read_exact(midi_len)?;
-        let mut settings = EffectSettings {
+        let mut settings = EffectSettings::default();
+        if version >= 3 {
+            settings.noise_gate_enabled = read_bool(&mut reader)?;
+            settings.noise_gate_threshold_db = reader.f32()?;
+        }
+        settings = EffectSettings {
             reverb_enabled: read_bool(&mut reader)?,
             reverb_amount: reader.f32()?,
             distortion_enabled: read_bool(&mut reader)?,
             distortion_drive: reader.f32()?,
-            ..EffectSettings::default()
+            ..settings
         };
         if version >= 2 {
             settings.compressor_enabled = read_bool(&mut reader)?;
@@ -561,6 +593,7 @@ fn read_bool(reader: &mut Reader<'_>) -> Result<bool, StateError> {
 }
 
 fn validate_effect_settings(settings: EffectSettings) -> Result<(), ProcessError> {
+    validate_noise_gate_threshold(settings.noise_gate_threshold_db)?;
     if !settings.reverb_amount.is_finite() || !(0.0..=1.0).contains(&settings.reverb_amount) {
         return Err(ProcessError::InvalidReverbAmount);
     }
@@ -575,6 +608,13 @@ fn validate_effect_settings(settings: EffectSettings) -> Result<(), ProcessError
     validate_eq_gain(settings.eq_low_db)?;
     validate_eq_gain(settings.eq_mid_db)?;
     validate_eq_gain(settings.eq_high_db)?;
+    Ok(())
+}
+
+fn validate_noise_gate_threshold(threshold_db: f32) -> Result<(), ProcessError> {
+    if !threshold_db.is_finite() || !(-80.0..=0.0).contains(&threshold_db) {
+        return Err(ProcessError::InvalidNoiseGateThreshold);
+    }
     Ok(())
 }
 
@@ -676,6 +716,8 @@ mod tests {
         effected.set_midi_layer(0, 69, 0, layer).unwrap();
         effected
             .set_effect_settings(EffectSettings {
+                noise_gate_enabled: true,
+                noise_gate_threshold_db: -42.0,
                 reverb_enabled: true,
                 reverb_amount: 0.5,
                 distortion_enabled: true,
@@ -743,6 +785,10 @@ mod tests {
         );
         assert_eq!(processor.effect_settings(), old);
         assert_eq!(
+            processor.set_noise_gate_threshold_db(-81.0),
+            Err(ProcessError::InvalidNoiseGateThreshold)
+        );
+        assert_eq!(
             processor.set_compressor_amount(1.1),
             Err(ProcessError::InvalidCompressorAmount)
         );
@@ -781,6 +827,8 @@ mod tests {
         source.select_preset(Preset::PercussionKit);
         source
             .set_effect_settings(EffectSettings {
+                noise_gate_enabled: true,
+                noise_gate_threshold_db: -42.0,
                 reverb_enabled: true,
                 reverb_amount: 0.375,
                 distortion_enabled: true,
@@ -808,6 +856,8 @@ mod tests {
         // the old controls and supplies bypassed defaults for newer effects.
         let mut version_one = state.clone();
         version_one[4..6].copy_from_slice(&1_u16.to_le_bytes());
+        let midi_len = u32::from_le_bytes(version_one[6..10].try_into().unwrap()) as usize;
+        version_one.drain(10 + midi_len..15 + midi_len);
         version_one.truncate(version_one.len() - 18);
         let mut legacy = AudioProcessor::<4, 1>::new(48_000.0, 1).unwrap();
         legacy.load_state(&version_one).unwrap();
@@ -818,6 +868,7 @@ mod tests {
         assert_eq!(legacy_settings.distortion_drive, 7.5);
         assert!(!legacy_settings.compressor_enabled);
         assert!(!legacy_settings.eq_enabled);
+        assert!(!legacy_settings.noise_gate_enabled);
     }
 
     #[test]

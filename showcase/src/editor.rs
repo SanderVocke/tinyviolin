@@ -48,6 +48,23 @@ pub(crate) fn create_editor(
                         );
                     });
                     ui.horizontal(|ui| {
+                        let mut gate_enabled = params.noise_gate_enabled.value();
+                        if ui.checkbox(&mut gate_enabled, "Noise Gate").changed() {
+                            setter.begin_set_parameter(&params.noise_gate_enabled);
+                            setter.set_parameter(&params.noise_gate_enabled, gate_enabled);
+                            setter.end_set_parameter(&params.noise_gate_enabled);
+                        }
+                        ui.label("Threshold");
+                        ui.add_enabled(
+                            gate_enabled,
+                            widgets::ParamSlider::for_param(
+                                &params.noise_gate_threshold_db,
+                                setter,
+                            )
+                            .with_width(130.0),
+                        );
+                    });
+                    ui.horizontal(|ui| {
                         let mut reverb_enabled = params.reverb_enabled.value();
                         if ui.checkbox(&mut reverb_enabled, "Reverb").changed() {
                             setter.begin_set_parameter(&params.reverb_enabled);

@@ -63,6 +63,12 @@ struct ShowcaseParams {
     #[id = "master-gain"]
     master_gain: FloatParam,
 
+    #[id = "noise-gate-enabled"]
+    noise_gate_enabled: BoolParam,
+
+    #[id = "noise-gate-threshold"]
+    noise_gate_threshold_db: FloatParam,
+
     #[id = "reverb-enabled"]
     reverb_enabled: BoolParam,
 
@@ -112,6 +118,17 @@ impl Default for ShowcaseParams {
             .with_unit(" dB")
             .with_value_to_string(formatters::v2s_f32_gain_to_db(1))
             .with_string_to_value(formatters::s2v_f32_gain_to_db()),
+            noise_gate_enabled: BoolParam::new("Noise Gate", false),
+            noise_gate_threshold_db: FloatParam::new(
+                "Gate Threshold",
+                -50.0,
+                FloatRange::Linear {
+                    min: -80.0,
+                    max: 0.0,
+                },
+            )
+            .with_unit(" dB")
+            .with_value_to_string(formatters::v2s_f32_rounded(1)),
             reverb_enabled: BoolParam::new("Reverb", false),
             reverb_amount: FloatParam::new(
                 "Reverb Amount",
@@ -246,6 +263,8 @@ impl Plugin for TinyViolinShowcase {
         }
 
         let settings = tinyviolin::EffectSettings {
+            noise_gate_enabled: self.params.noise_gate_enabled.value(),
+            noise_gate_threshold_db: self.params.noise_gate_threshold_db.value(),
             reverb_enabled: self.params.reverb_enabled.value(),
             reverb_amount: self.params.reverb_amount.value(),
             distortion_enabled: self.params.distortion_enabled.value(),
